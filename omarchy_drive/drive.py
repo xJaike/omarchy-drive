@@ -1,4 +1,8 @@
-"""Google Drive v3 adapter: pagination, conditional writes, resumable transfers."""
+"""Google Drive adapter: pagination, conditional writes, resumable transfers.
+
+Everything uses v3 except writes to existing files. v3 neither returns ETags nor
+enforces If-Match, so overwrite and trash go through v2, which does both.
+"""
 import hashlib
 import http.client
 import json
@@ -10,6 +14,8 @@ from .storage import Blocked, DriveError, Offline
 
 API = 'https://www.googleapis.com/drive/v3/'
 UPLOAD = 'https://www.googleapis.com/upload/drive/v3/'
+API_V2 = 'https://www.googleapis.com/drive/v2/'
+UPLOAD_V2 = 'https://www.googleapis.com/upload/drive/v2/'
 FOLDER = 'application/vnd.google-apps.folder'
 FIELDS = 'id,name,mimeType,md5Checksum,size,modifiedTime,version,trashed,parents'
 CHUNK = 8 * 1024 * 1024
@@ -40,8 +46,7 @@ class Drive:
         self.progress = progress or (lambda *args: None)
 
     def get(self, file_id):
-        value, headers = self.http.json('GET', query_url(API + 'files/' + encode(file_id), fields=FIELDS), retry=True)
-        value['_etag'] = headers.get('ETag')
+        value, _ = self.http.json('GET', query_url(API + 'files/' + encode(file_id), fields=FIELDS), retry=True)
         return value
 
     def children(self, parent):
@@ -137,10 +142,15 @@ class Drive:
         return current
 
     def condition(self, expected):
-        current = self.unchanged(expected)
-        if not current.get('_etag'):
+        self.unchanged(expected)
+        current, _ = self.http.json('GET', query_url(API_V2 + 'files/' + encode(expected['id']),
+                                                     fields='etag,version,md5Checksum'), retry=True)
+        # The ETag must describe the version that was just checked, not a newer one.
+        if current.get('version') != expected.get('version') or current.get('md5Checksum') != expected.get('md5Checksum'):
+            raise Blocked('A Drive file changed during sync. Run sync again to reconcile the new version.')
+        if not current.get('etag'):
             raise Blocked('Google did not provide a version precondition. Refusing to overwrite or trash this file.')
-        return {'If-Match': current['_etag']}
+        return {'If-Match': current['etag']}
 
     def download(self, item, target):
         self.unchanged(item)
@@ -200,10 +210,11 @@ class Drive:
             if not pending.get('session'):
                 condition = self.condition(existing) if existing else {}
                 body = {} if existing else dict(id=pending['id'], name=component(name), parents=[parent])
-                endpoint = UPLOAD + 'files' + ('/' + encode(pending['id']) if existing else '')
+                endpoint = UPLOAD_V2 + 'files/' + encode(pending['id']) if existing else UPLOAD + 'files'
+                fields = 'id,md5Checksum,version' if existing else FIELDS
                 try:
-                    _, headers, _ = self.http.request('PATCH' if existing else 'POST',
-                        query_url(endpoint, uploadType='resumable', fields=FIELDS), data=body,
+                    _, headers, _ = self.http.request('PUT' if existing else 'POST',
+                        query_url(endpoint, uploadType='resumable', fields=fields), data=body,
                         headers=dict(condition, **{'X-Upload-Content-Type': 'application/octet-stream',
                                                    'X-Upload-Content-Length': str(total)}), expected=(200, 201))
                 except APIError as error:
@@ -215,8 +226,9 @@ class Drive:
                     break
                 session = headers.get('Location', '')
                 parsed = urllib.parse.urlsplit(session)
+                trusted_path = '/upload/drive/v2/files' if existing else '/upload/drive/v3/files'
                 if (parsed.scheme != 'https' or parsed.hostname != 'www.googleapis.com' or
-                        not parsed.path.startswith('/upload/drive/v3/files')):
+                        not parsed.path.startswith(trusted_path)):
                     raise Blocked('Google returned an untrusted upload session.')
                 pending['session'] = session
                 pending['expected_version'] = existing.get('version') if existing else None
@@ -278,9 +290,11 @@ class Drive:
         if result.get('md5Checksum') != checksum or result.get('id') != pending['id']:
             raise Blocked('Uploaded content failed verification. Sync history was not advanced.')
         self.store.save_pending(key, None)
-        return dict(result, hash=checksum, kind='file', size=int(result.get('size', total)))
+        # A v2 reply is partial, so keep the file's identity from the known item.
+        # The verified checksum means the stored size is the size just uploaded.
+        return {**(existing or {}), **result, 'hash': checksum, 'kind': 'file', 'size': total}
 
     def trash(self, expected):
         # Only Drive Trash is used; this app never permanently deletes remote files.
-        self.http.json('PATCH', query_url(API + 'files/' + encode(expected['id']), fields='id,trashed'),
-                       data={'trashed': True}, headers=self.condition(expected))
+        self.http.json('PATCH', query_url(API_V2 + 'files/' + encode(expected['id']), fields='id,labels/trashed'),
+                       data={'labels': {'trashed': True}}, headers=self.condition(expected))

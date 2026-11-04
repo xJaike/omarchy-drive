@@ -12,7 +12,7 @@ import urllib.request
 
 from omarchy_drive.drive import Drive, FOLDER
 from omarchy_drive.engine import Engine
-from omarchy_drive.http import HTTP
+from omarchy_drive.http import APIError, HTTP
 from omarchy_drive.storage import Paths, Store
 
 
@@ -37,7 +37,17 @@ class DriveServer(ThreadingHTTPServer):
         return file_id
 
 
+def etag(item):
+    return '"v' + item['version'] + '"'
+
+
+def v2_resource(item):
+    return dict(id=item['id'], title=item['name'], version=item['version'], md5Checksum=item.get('md5Checksum'),
+                fileSize=item.get('size'), etag=etag(item), labels={'trashed': bool(item.get('trashed'))})
+
+
 class DriveHandler(BaseHTTPRequestHandler):
+    """Mirrors observed Drive behaviour: v3 has no ETag and ignores If-Match; v2 has both."""
     def log_message(self, *args):
         pass
 
@@ -76,7 +86,9 @@ class DriveHandler(BaseHTTPRequestHandler):
                 offset = int(self.headers['Range'].split('=')[1].split('-')[0])
                 return self.send(status=206, headers={'Content-Range': f'bytes {offset}-{len(content)-1}/{len(content)}'}, raw=content[offset:])
             return self.send(raw=content)
-        return self.send(item, headers={'ETag': '"v' + item['version'] + '"'})
+        if path.startswith('/drive/v2/'):
+            return self.send(v2_resource(item))
+        return self.send(item)
 
     def do_POST(self):
         path, _ = self.parse()
@@ -94,10 +106,12 @@ class DriveHandler(BaseHTTPRequestHandler):
         path, _ = self.parse()
         file_id = path.rsplit('/', 1)[1]
         item = self.server.items[file_id]
-        if self.headers.get('If-Match') != '"v' + item['version'] + '"':
-            self.body()
-            return self.send(status=412)
         metadata = json.loads(self.body())
+        if path.startswith('/drive/v2/'):
+            if self.headers.get('If-Match') != etag(item):
+                return self.send(status=412)
+            item['trashed'] = metadata['labels']['trashed']
+            return self.send(v2_resource(item))
         if path.startswith('/upload/'):
             key = str(len(self.server.sessions) + 1)
             self.server.sessions[key] = dict(metadata=dict(item, **metadata), content=b'')
@@ -106,7 +120,15 @@ class DriveHandler(BaseHTTPRequestHandler):
         return self.send(item)
 
     def do_PUT(self):
-        _, query = self.parse()
+        path, query = self.parse()
+        if 'session' not in query:
+            self.body()
+            item = self.server.items[path.rsplit('/', 1)[1]]
+            if not path.startswith('/upload/drive/v2/') or self.headers.get('If-Match') != etag(item):
+                return self.send(status=412)
+            key = str(len(self.server.sessions) + 1)
+            self.server.sessions[key] = dict(metadata=dict(item), content=b'', v2=True)
+            return self.send(headers={'Location': f'https://www.googleapis.com/upload/drive/v2/files/{item["id"]}?session={key}'})
         session = self.server.sessions[query['session'][0]]
         chunk = self.body()
         total = int(self.headers['Content-Range'].rsplit('/', 1)[1])
@@ -128,7 +150,8 @@ class DriveHandler(BaseHTTPRequestHandler):
             self.connection.shutdown(socket.SHUT_RDWR)
             self.connection.close()
             return
-        return self.send(self.server.items[metadata['id']])
+        item = self.server.items[metadata['id']]
+        return self.send(v2_resource(item) if session.get('v2') else item)
 
 
 class LoopbackOpener:
@@ -184,6 +207,35 @@ class WholeAppIntegrationTests(unittest.TestCase):
         self.engine().sync()
         self.assertTrue(self.server.items[cloud_id]['trashed'])
         self.assertEqual(self.engine().sync(), [])
+
+    def race_after_precondition(self, file_id, content):
+        """Simulate a Drive edit landing after the ETag was read but before the write."""
+        original = self.drive.condition
+        def racing(expected):
+            header = original(expected)
+            self.server.put('cloud.txt', content, file_id)
+            return header
+        self.drive.condition = racing
+
+    def test_drive_edit_racing_an_overwrite_is_not_clobbered(self):
+        cloud_id = self.server.put('cloud.txt', b'cloud')
+        self.engine().sync()
+        (self.local / 'cloud.txt').write_bytes(b'edited locally')
+        self.race_after_precondition(cloud_id, b'edited in Drive')
+        with self.assertRaises(APIError) as caught:
+            self.engine().sync()
+        self.assertEqual(caught.exception.status, 412)
+        self.assertEqual(self.server.content[cloud_id], b'edited in Drive')
+
+    def test_drive_edit_racing_a_trash_is_not_trashed(self):
+        cloud_id = self.server.put('cloud.txt', b'cloud')
+        self.engine().sync()
+        (self.local / 'cloud.txt').unlink()
+        self.race_after_precondition(cloud_id, b'edited in Drive')
+        with self.assertRaises(APIError) as caught:
+            self.engine().sync()
+        self.assertEqual(caught.exception.status, 412)
+        self.assertFalse(self.server.items[cloud_id]['trashed'])
 
     def test_lost_chunk_response_resumes_saved_server_session(self):
         (self.local / 'test.txt').write_bytes(b'some bytes')

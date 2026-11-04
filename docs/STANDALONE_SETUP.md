@@ -667,7 +667,8 @@ that invocation; it does not disable safeguards for future scheduled runs.
 ### No provider ETag, HTTP 412, or a file changed during sync
 
 The app refuses cloud overwrites or trash operations when Google does not supply
-a usable ETag. HTTP 412 or a changed-version message can indicate concurrent
+a usable ETag. These two writes use Drive API v2 because v3 does not return ETags
+or enforce `If-Match`. HTTP 412 or a changed-version message can indicate concurrent
 modification. Let edits finish, stop other sync clients, and preview again.
 If the error persists, keep the files and database and report the sanitized
 error. There is no command to bypass version preconditions.

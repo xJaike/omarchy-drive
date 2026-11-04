@@ -154,14 +154,55 @@ class APITests(unittest.TestCase):
             drive.upload(source, 'root', 'a.txt', self.item['md5Checksum'])
         self.assertEqual(len(self.http.calls), 2)
 
-    def test_update_and_trash_require_version_preconditions(self):
-        drive = self.adapter([json_response(self.item, {'ETag': '"v2"'}), json_response({'id': 'file-1', 'trashed': True})])
+    def v2_item(self, **changes):
+        return dict(dict(id='file-1', title='a.txt', version='2', md5Checksum=self.item['md5Checksum'],
+                         fileSize='6', etag='"etag-2"', labels={'trashed': False}), **changes)
+
+    def test_trash_is_conditional_on_the_v2_etag(self):
+        drive = self.adapter([json_response(self.item), json_response(self.v2_item()),
+                              json_response(self.v2_item(labels={'trashed': True}))])
         drive.trash(self.item)
-        self.assertEqual(self.http.calls[1][2]['headers'], {'If-Match': '"v2"'})
-        drive = self.adapter([json_response(self.item)])
+        method, url, kwargs = self.http.calls[2]
+        self.assertEqual(method, 'PATCH')
+        self.assertTrue(url.startswith('https://www.googleapis.com/drive/v2/files/file-1?'))
+        self.assertEqual(kwargs['headers'], {'If-Match': '"etag-2"'})
+        self.assertEqual(kwargs['data'], {'labels': {'trashed': True}})
+
+    def test_overwrite_is_conditional_on_the_v2_etag(self):
+        source = self.root / 'source'
+        source.write_bytes(b'abcdef')
+        checksum = self.item['md5Checksum']
+        existing = dict(self.item, size='3')
+        session = 'https://www.googleapis.com/upload/drive/v2/files/file-1?uploadType=resumable&upload_id=x'
+        drive = self.adapter([
+            json_response(existing), json_response(self.v2_item()), (200, {'Location': session}, b''),
+            (308, {}, b''), json_response(existing),
+            json_response({'id': 'file-1', 'md5Checksum': checksum, 'version': '3'}),
+        ])
+        result = drive.upload(source, 'root', 'a.txt', checksum, existing)
+        method, url, kwargs = self.http.calls[2]
+        self.assertEqual(method, 'PUT')
+        self.assertTrue(url.startswith('https://www.googleapis.com/upload/drive/v2/files/file-1?'))
+        self.assertEqual(kwargs['headers']['If-Match'], '"etag-2"')
+        # The v2 reply is partial: the result keeps the file's identity and reports the new content.
+        self.assertEqual((result['name'], result['version'], result['size'], result['hash']), ('a.txt', '3', 6, checksum))
+
+    def test_overwrite_never_sends_token_to_provider_supplied_host(self):
+        source = self.root / 'source'
+        source.write_bytes(b'abcdef')
+        drive = self.adapter([json_response(self.item), json_response(self.v2_item()),
+                              (200, {'Location': 'https://attacker.example/upload/drive/v2/files/file-1'}, b'')])
         with self.assertRaises(Blocked):
-            drive.trash(self.item)
-        self.assertEqual(len(self.http.calls), 1)
+            drive.upload(source, 'root', 'a.txt', self.item['md5Checksum'], self.item)
+        self.assertEqual(len(self.http.calls), 3)
+
+    def test_trash_blocks_before_writing_when_precondition_is_unusable(self):
+        for label, v2 in (('no etag', self.v2_item(etag=None)), ('version moved', self.v2_item(version='3')),
+                          ('content moved', self.v2_item(md5Checksum='other'))):
+            drive = self.adapter([json_response(self.item), json_response(v2)])
+            with self.subTest(label), self.assertRaises(Blocked):
+                drive.trash(self.item)
+            self.assertEqual(len(self.http.calls), 2)
 
     def test_completed_upload_with_bad_hash_keeps_pending_record(self):
         source = self.root / 'source'
