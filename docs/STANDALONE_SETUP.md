@@ -471,8 +471,9 @@ path; there are no patterns.
 **Untick or exclude** to stop syncing. No file changes on either side and nothing
 is written to Drive. Ticking or including it again merges: identical files are
 remembered, one-sided files are copied, and differing files keep both versions.
-Selection changes wait until an active sync finishes. Expanded folders stay open
-and update after each change, so you can exclude several items in a row.
+Ticking and excluding are unavailable during a sync, and the checkboxes look
+disabled until it finishes; rows can still expand. Expanded folders stay open and
+update after each change, so you can exclude several items in a row.
 
 Keyboard: Up and Down move through the rows, Right expands, Left collapses, Space
 toggles the tick, and `o` opens the top-level folder under the cursor when it
@@ -700,6 +701,9 @@ Restore the ticked folder to its original path, or untick it in the panel. The a
 checks the folder's identity, so recreating an empty directory with the same name
 is not a substitute for restoring it. Unticking it and ticking it again merges safely.
 
+A ticked folder that is gone from Drive stops the same way, with no change on either
+side. Restore it on Drive, or untick it.
+
 For a symlink, special file, nested mount, or file/folder name collision inside a
 ticked folder, use **Exclude this** in the panel, or move or rename the item. Then
 preview again. Do not reset the database just to bypass these checks.
@@ -814,10 +818,17 @@ omarchy plugin update io.github.xjaike.google-drive
 bash ~/.config/omarchy/plugins/io.github.xjaike.google-drive/install.sh
 omarchy-drive doctor
 omarchy-drive preview
+omarchy-drive resume
 ```
 
+Pause first, because the new code starts working as soon as the plugin files
+change. Updating from a version that used `~/GoogleDrive` migrates your settings
+within seconds, because the panel's status poll runs the new code, even before the
+installer has run. Automatic sync may then run if you left it on.
+
 Preserve local Git changes before updating. The installer leaves automatic sync
-paused; after review, use the panel's switch to resume.
+paused. Review the preview before `omarchy-drive resume`, and resume only when you
+want automatic sync on. The panel's switch does the same.
 
 ### Installed from a source checkout
 
@@ -834,8 +845,12 @@ omarchy-drive --version
 ```
 
 If `git status` shows local changes, preserve or resolve them before pulling;
-do not discard them to force an update. The installer leaves automatic sync
-paused. For an already connected v2 installation, check and resume:
+do not discard them to force an update. The first two commands do what
+`omarchy-drive pause` does and also stop a sync already running. They come first
+because, if your panel runs from this checkout, its status poll runs the pulled code
+and migrates your settings within seconds; automatic sync may then run if you left
+it on. The installer leaves automatic sync paused. For an already connected v2
+installation, check and resume, reviewing the preview before you continue:
 
 ```bash
 omarchy-drive doctor
@@ -848,7 +863,9 @@ omarchy-drive resume
 
 Earlier versions synced one local folder, `~/GoogleDrive`, plus optional home
 folders. The first command or panel read after updating migrates your settings
-once, under the sync lock:
+once, under the sync lock. The panel reads within seconds of the plugin files
+changing, so pause automatic sync before updating, as above, and preview before
+resuming:
 
 1. If the sync history belongs to a different Drive folder, it stops and changes
    nothing.

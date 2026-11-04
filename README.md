@@ -3,10 +3,11 @@
 > Fork of [hominluo/omarchy-google-drive](https://github.com/hominluo/omarchy-google-drive),
 > adapted to use our standalone Google Drive API backend instead of rclone.
 
-This version retains the original panel, folder picker, keyboard navigation and
-Google Drive icon by **Homin Luo**, including work credited upstream to
-**Wesley Cole**. The replacement sync backend is by **xJaike**. This is an
-independent fork, not an official upstream release.
+This version retains the original panel, keyboard navigation and Google Drive icon
+by **Homin Luo**, including work credited upstream to **Wesley Cole**. The
+replacement sync backend, and the Folders list that replaces the original folder
+picker, are by **xJaike**. This is an independent fork, not an official upstream
+release.
 
 **No rclone, Insync, or FUSE is required.** See [NOTICE.md](NOTICE.md) for provenance
 and trademark information, and [LICENSE](LICENSE) for the retained MIT copyright
@@ -136,8 +137,8 @@ tick ever syncs. Files added later to a ticked folder are included. Ticking a
 Unticking a folder or excluding an item stops syncing it and **changes no file on
 either side**. Ticking or including it again merges: identical files are
 remembered, one-sided files are copied, and differing files keep both versions.
-Ticking starts no transfer by itself, and changes wait until an active sync
-finishes.
+Ticking starts no transfer by itself. Ticking and excluding are unavailable during
+a sync, and the checkboxes look disabled until it finishes. Rows can still expand.
 
 A problem tied to one path, such as a symlink inside a ticked folder, stops the
 sync and shows **Exclude this**, or **Untick this** when the problem is the ticked
@@ -201,17 +202,24 @@ settings. See the full setup guide for using a different one.
 ## Update
 
 ```bash
+~/.local/bin/omarchy-drive pause
 omarchy plugin update io.github.xjaike.google-drive
 bash ~/.config/omarchy/plugins/io.github.xjaike.google-drive/install.sh
+~/.local/bin/omarchy-drive preview
+~/.local/bin/omarchy-drive resume
 ```
 
-The installer pauses scheduled sync while replacing helpers. Review with
-`~/.local/bin/omarchy-drive preview`, then re-enable the panel's automatic switch
-when ready. Preserve local Git changes before updating.
+Pause first, because the new code starts working as soon as the plugin files
+change. Updating from a version that used `~/GoogleDrive` migrates your settings
+within seconds, because the panel's status poll runs the new code, even before the
+installer has run. Automatic sync may then run if you left it on.
 
-Updating from a version that used `~/GoogleDrive` migrates your settings once. If
-that folder still holds files, the app stops, changes nothing, and names what to
-move. See [the migration steps and how to undo them](docs/STANDALONE_SETUP.md#move-from-the-googledrive-layout).
+The installer also pauses scheduled sync while replacing helpers. Review the
+preview, and resume only when it looks right and you want automatic sync on.
+Preserve local Git changes before updating.
+
+The migration happens once. If `~/GoogleDrive` still holds files, the app stops,
+changes nothing, and names what to move. See [the migration steps and how to undo them](docs/STANDALONE_SETUP.md#move-from-the-googledrive-layout).
 
 ## Remove
 
