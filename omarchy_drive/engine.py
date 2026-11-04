@@ -184,6 +184,11 @@ class Engine:
                 self.local.update(scan_local(source, name + '/', included))
         # Build complete listings before any local or cloud mutation.
         self.remote = self.drive.scan(self.settings['folder_id'], included)
+        for name in sources:
+            item = self.remote.get(name)
+            if item and item['kind'] != 'dir':
+                raise Blocked(f'On Drive, {name} is not a folder, so it cannot pair with ~/{name}. '
+                              'Untick it, or rename it on Drive.', path=name)
         self.store.identity(self.settings['folder_id'])
         baseline = {p: item for p, item in self.store.baseline().items()
                     if included(p) and p.partition('/')[0] not in self.merging}

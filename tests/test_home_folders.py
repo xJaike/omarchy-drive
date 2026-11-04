@@ -423,6 +423,37 @@ class HomeFolderTests(HomeFolderCase):
         self.assertEqual(self.drive.calls, [])
         self.assertIn('Archive/x.txt', self.drive.files)
 
+    def test_ticked_name_that_is_not_a_folder_on_drive_stops_before_any_action(self):
+        unsupported = {'id': 'doc', 'kind': 'unsupported', 'hash': None, 'name': 'Archive'}
+        for label, arrange in (('file', lambda: self.drive.put('Archive', b'not a folder')),
+                               ('google-doc', lambda: self.drive.files.update(Archive=unsupported))):
+            for local_folder in (False, True):
+                with self.subTest(drive=label, local_folder=local_folder):
+                    self.drive.files.clear()
+                    arrange()
+                    if local_folder:
+                        (self.home/'Archive').mkdir()
+                    self.settings(home_folders={'Archive': {'identity': None}})
+                    drive_before = dict(self.drive.files)
+                    settings_before = self.paths.settings.read_bytes()
+                    with self.assertRaisesRegex(Blocked, 'Archive') as caught:
+                        self.engine().sync()
+                    self.assertEqual(caught.exception.path, 'Archive')
+                    self.assertEqual(self.drive.files, drive_before)
+                    self.assertEqual(self.drive.calls, [])
+                    self.assertEqual(self.paths.settings.read_bytes(), settings_before)
+                    if local_folder:
+                        self.assertEqual(list((self.home/'Archive').iterdir()), [])
+                        (self.home/'Archive').rmdir()
+                    self.assertFalse(os.path.lexists(self.home/'Archive'))
+
+    def test_drive_only_tick_of_a_drive_file_also_stops_in_preview(self):
+        self.drive.put('Archive', b'not a folder')
+        self.settings(home_folders={'Archive': {'identity': None}})
+        with self.assertRaises(Blocked) as caught:
+            self.engine().snapshot()
+        self.assertEqual(caught.exception.path, 'Archive')
+
     def test_folder_created_by_hand_after_a_drive_only_tick_merges(self):
         self.cache(Archive='drive')
         self.drive_folder('Archive')
