@@ -10,6 +10,7 @@ import urllib.error
 from omarchy_drive.auth import Tokens, authorize, load_client
 from omarchy_drive.drive import CHANGED_ON_DRIVE, Drive, FOLDER
 from omarchy_drive.http import HTTP, APIError
+from omarchy_drive.selection import includes
 from omarchy_drive.storage import AuthRequired, Blocked, Offline, Paths, Store, atomic_json
 
 
@@ -267,7 +268,7 @@ class APITests(unittest.TestCase):
     def test_slash_name_inside_a_folder_blocks_even_under_an_exclusion(self):
         drive = self.adapter(self.slash_listing('gone/x'))
         with self.assertRaises(Blocked):
-            drive.scan('root', lambda p: p != 'keep/gone' and not p.startswith('keep/gone/'))
+            drive.scan('root', lambda p: includes(p, {'home_folders': {'keep': {}}, 'excluded': ['keep/gone']}))
 
     def test_slash_name_inside_a_folder_blocks_without_exclusions(self):
         drive = self.adapter(self.slash_listing('other/x'))
@@ -276,7 +277,7 @@ class APITests(unittest.TestCase):
 
     def test_top_level_slash_name_is_skipped_when_a_selection_is_supplied(self):
         drive = self.adapter(self.slash_listing('a.txt', top_name='keep/x'))
-        result = drive.scan('root', lambda p: p == 'keep' or p == 'keep/a.txt')
+        result = drive.scan('root', lambda p: includes(p, {'home_folders': {'keep': {}}}))
         self.assertNotIn('keep/x', result)
         self.assertEqual(set(result), {'keep', 'keep/a.txt'})
 

@@ -93,9 +93,13 @@ class Drive:
             prefix, parent = pending.pop()
             for item in self.children(parent):
                 path = f'{prefix}/{item["name"]}' if prefix else item['name']
-                # A "/" inside a folder would fake a deeper path, so it must block, not be pruned.
-                if prefix and '/' in item['name']:
-                    component(item['name'])
+                if '/' in item['name']:
+                    # Loose top-level slash names never sync, but inside a folder one would fake a deeper
+                    # path, so it must block instead of being pruned.
+                    if not prefix and included is not None:
+                        continue
+                    if prefix:
+                        component(item['name'])
                 # Pruned paths are never validated, so problems inside them cannot block a sync.
                 if included is not None and not included(path):
                     continue
