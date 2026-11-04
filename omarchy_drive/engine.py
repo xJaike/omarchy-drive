@@ -52,8 +52,12 @@ def scan_local(root, prefix='', included=None):
     if root.is_symlink() or not root.is_dir() or os.path.ismount(root):
         raise Blocked('The local sync folder must exist as an ordinary local directory. Restore it before syncing.')
     result = {}
+    def unreadable(kind, where, error):
+        raise Blocked(f'A local {kind} could not be read: {where}. Fix its permissions or stop syncing it. '
+                      'No changes were applied.', path=where) from error
     def scan_error(error):
-        raise Blocked('A local folder could not be read. No changes were applied.') from error
+        rest = Path(error.filename).relative_to(root).as_posix()
+        unreadable('folder', prefix.rstrip('/') if rest == '.' else prefix + rest, error)
     for directory, folders, files in os.walk(root, followlinks=False, onerror=scan_error):
         for name in list(folders) + files:
             path = Path(directory) / name
@@ -63,19 +67,22 @@ def scan_local(root, prefix='', included=None):
                 if name in folders:
                     folders.remove(name)
                 continue
-            info = path.lstat()
-            if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
-                raise Blocked(f'Unsupported local file type: {relative}. Move it outside the sync folder.', path=relative)
-            if stat.S_ISDIR(info.st_mode):
-                if os.path.ismount(path):
-                    raise Blocked(f'A nested mount is not supported: {relative}', path=relative)
-                result[relative] = {'kind': 'dir'}
-            else:
-                checksum = digest(path)
-                after = path.stat()
-                if (info.st_size, info.st_mtime_ns, info.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
-                    raise Blocked(f'A local file changed during scanning: {relative}. Retry sync.')
-                result[relative] = dict(kind='file', hash=checksum, size=info.st_size)
+            try:
+                info = path.lstat()
+                if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+                    raise Blocked(f'Unsupported local file type: {relative}. Move it outside the sync folder.', path=relative)
+                if stat.S_ISDIR(info.st_mode):
+                    if os.path.ismount(path):
+                        raise Blocked(f'A nested mount is not supported: {relative}', path=relative)
+                    result[relative] = {'kind': 'dir'}
+                else:
+                    checksum = digest(path)
+                    after = path.stat()
+                    if (info.st_size, info.st_mtime_ns, info.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+                        raise Blocked(f'A local file changed during scanning: {relative}. Retry sync.')
+                    result[relative] = dict(kind='file', hash=checksum, size=info.st_size)
+            except PermissionError as error:
+                unreadable('folder' if name in folders else 'file', relative, error)
     return result
 
 

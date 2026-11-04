@@ -376,14 +376,16 @@ class HomeFolderTests(HomeFolderCase):
         self.assertEqual(caught.exception.path, 'Documents/bad/pipe')
         self.assertEqual(self.drive.calls, [])
 
+    @unittest.skipIf(os.geteuid() == 0, 'root can read every folder')
     def test_unreadable_folder_only_blocks_when_included(self):
         locked = self.documents/'locked'
         locked.mkdir()
         locked.chmod(0)
         self.addCleanup(locked.chmod, 0o700)
         self.enable()
-        with self.assertRaisesRegex(Blocked, 'could not be read'):
+        with self.assertRaisesRegex(Blocked, 'could not be read') as caught:
             self.engine().sync()
+        self.assertEqual(caught.exception.path, 'Documents/locked')
         self.assertEqual(self.drive.calls, [])
         set_excluded(self.paths, 'Documents/locked', True)
         self.engine().sync()

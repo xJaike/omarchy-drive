@@ -374,6 +374,54 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.settings['home_folders']['Sync'], {'identity': [info.st_dev, info.st_ino]})
         self.assertEqual(read_json(self.paths.settings)['home_folders']['Sync'], {'identity': [info.st_dev, info.st_ino]})
 
+    @unittest.skipIf(os.geteuid() == 0, 'root can read every file')
+    def test_unreadable_folder_is_named_with_its_home_folder_prefix(self):
+        self.write('deep/locked/a', b'a')
+        locked = self.local / 'deep' / 'locked'
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o700)
+        with self.assertRaisesRegex(Blocked, 'could not be read: Sync/deep/locked') as caught:
+            self.engine().sync()
+        self.assertEqual(caught.exception.path, 'Sync/deep/locked')
+        self.assertEqual(self.drive.calls, [])
+        self.settings['excluded'] = ['Sync/deep/locked']
+        self.engine().sync()
+        self.assertNotIn('Sync/deep/locked', self.drive.files)
+
+    @unittest.skipIf(os.geteuid() == 0, 'root can read every file')
+    def test_unreadable_ticked_folder_is_named_without_a_dot(self):
+        self.local.chmod(0)
+        self.addCleanup(self.local.chmod, 0o700)
+        with self.assertRaisesRegex(Blocked, 'could not be read: Sync\\.') as caught:
+            self.engine().sync()
+        self.assertEqual(caught.exception.path, 'Sync')
+
+    @unittest.skipIf(os.geteuid() == 0, 'root can read every file')
+    def test_unreadable_file_is_named_and_excluding_it_clears_the_stop(self):
+        self.write('sub/secret', b'x')
+        self.write('sub/open', b'y')
+        secret = self.local / 'sub' / 'secret'
+        secret.chmod(0)
+        self.addCleanup(secret.chmod, 0o600)
+        with self.assertRaisesRegex(Blocked, 'could not be read: Sync/sub/secret') as caught:
+            self.engine().sync()
+        self.assertEqual(caught.exception.path, 'Sync/sub/secret')
+        self.assertEqual(self.drive.calls, [])
+        self.settings['excluded'] = ['Sync/sub/secret']
+        self.engine().sync()
+        self.assertNotIn('Sync/sub/secret', self.drive.files)
+        self.assertEqual(self.drive.files['Sync/sub/open']['content'], b'y')
+
+    @unittest.skipIf(os.geteuid() == 0, 'root can read every file')
+    def test_folder_that_lists_but_cannot_be_entered_names_the_blocked_item(self):
+        self.write('listed/a', b'a')
+        listed = self.local / 'listed'
+        listed.chmod(0o400)
+        self.addCleanup(listed.chmod, 0o700)
+        with self.assertRaisesRegex(Blocked, 'could not be read: Sync/listed/a') as caught:
+            self.engine().sync()
+        self.assertEqual(caught.exception.path, 'Sync/listed/a')
+
     def reset_scenario(self):
         for child in self.local.iterdir():
             if child.is_dir() and not child.is_symlink():
