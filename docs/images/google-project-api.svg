@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+<title id="title">1–2 · Choose a project and enable Drive</title>
+<desc id="desc">Original setup diagram, not a Google Cloud screenshot. Read the linked setup guide for commands and current official references.</desc>
+<rect width="1280" height="760" rx="18" fill="#f2f6fa"/>
+<rect x="0" y="0" width="1280" height="12" fill="#166554"/>
+<text x="48" y="58" font-family="DejaVu Sans, sans-serif" font-size="16" font-weight="700" fill="#166554">OMARCHY DRIVE · SETUP GUIDE</text>
+<text x="48" y="104" font-family="DejaVu Sans, sans-serif" font-size="32" font-weight="700" fill="#15283a">1–2 · Choose a project and enable Drive</text>
+<text x="48" y="139" font-family="DejaVu Sans, sans-serif" font-size="18" font-weight="400" fill="#35465b">Use the project that will own your Desktop OAuth client.</text>
+<path d="M68 212V608" stroke="#b7d3ca" stroke-width="3"/>
+<rect x="110" y="172" width="1122" height="116" rx="12" fill="#ffffff" stroke="#d8e2eb"/>
+<circle cx="68" cy="212" r="22" fill="#166554"/>
+<text x="61" y="219" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="700" fill="#ffffff">1</text>
+<text x="134" y="199" font-family="DejaVu Sans, sans-serif" font-size="13" font-weight="700" fill="#166554">PROJECT SELECTOR</text>
+<text x="134" y="232" font-family="DejaVu Sans, sans-serif" font-size="23" font-weight="700" fill="#15283a">Create or choose your project</text>
+<text x="650" y="217" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">Example: Omarchy Drive Personal</text>
+<text x="650" y="245" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">Select it before changing API settings.</text>
+<rect x="110" y="304" width="1122" height="116" rx="12" fill="#ffffff" stroke="#d8e2eb"/>
+<circle cx="68" cy="344" r="22" fill="#166554"/>
+<text x="61" y="351" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="700" fill="#ffffff">2</text>
+<text x="134" y="331" font-family="DejaVu Sans, sans-serif" font-size="13" font-weight="700" fill="#166554">API LIBRARY</text>
+<text x="134" y="364" font-family="DejaVu Sans, sans-serif" font-size="23" font-weight="700" fill="#15283a">Find Google Drive API</text>
+<text x="650" y="349" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">APIs &amp; Services → Library</text>
+<text x="650" y="377" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">Search for Google Drive API.</text>
+<rect x="110" y="436" width="1122" height="116" rx="12" fill="#ffffff" stroke="#d8e2eb"/>
+<circle cx="68" cy="476" r="22" fill="#166554"/>
+<text x="61" y="483" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="700" fill="#ffffff">3</text>
+<text x="134" y="463" font-family="DejaVu Sans, sans-serif" font-size="13" font-weight="700" fill="#166554">API DETAILS</text>
+<text x="134" y="496" font-family="DejaVu Sans, sans-serif" font-size="23" font-weight="700" fill="#15283a">Select Enable</text>
+<text x="650" y="481" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">Already enabled? The page offers Manage.</text>
+<text x="650" y="509" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">Allow activation time before retrying setup.</text>
+<rect x="110" y="568" width="1122" height="116" rx="12" fill="#ffffff" stroke="#d8e2eb"/>
+<circle cx="68" cy="608" r="22" fill="#166554"/>
+<text x="61" y="615" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="700" fill="#ffffff">4</text>
+<text x="134" y="595" font-family="DejaVu Sans, sans-serif" font-size="13" font-weight="700" fill="#166554">CHECKPOINT</text>
+<text x="134" y="628" font-family="DejaVu Sans, sans-serif" font-size="23" font-weight="700" fill="#15283a">Project + Drive API are ready</text>
+<text x="650" y="613" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">OAuth approval is a separate requirement.</text>
+<text x="650" y="641" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">403 accessNotConfigured points back here.</text>
+<text x="48" y="717" font-family="DejaVu Sans, sans-serif" font-size="15" font-weight="400" fill="#526579">SETUP DIAGRAM · Not a Google Cloud screenshot · Navigation checked 2026-11-04</text>
+<text x="48" y="740" font-family="DejaVu Sans, sans-serif" font-size="13" font-weight="400" fill="#526579">No real accounts, project IDs, credentials or file content are shown.</text>
+</svg>

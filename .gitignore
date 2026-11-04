@@ -9,3 +9,5 @@ tokens.json
 *.sqlite3*
 *.jsonl
 *.log
+
+.superdesign/

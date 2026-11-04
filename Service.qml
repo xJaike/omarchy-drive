@@ -17,6 +17,9 @@ Item {
   property string iconState: "setup"
   property string detailsTooltip: "Checking Google Drive…"
   property string activityText: ""
+  property var currentTransfer: null
+  property var recentFiles: []
+  property int remainingChanges: 0
   property string folderPath: ""
   property string cloudFolderName: "Omarchy"
   property string cloudUrl: "https://drive.google.com/drive/my-drive"
@@ -80,6 +83,10 @@ Item {
     iconState = value.iconState || "setup"
     detailsTooltip = value.detailsTooltip || statusText
     activityText = value.activityText || ""
+    currentTransfer = syncing ? (value.current || null) : null
+    remainingChanges = Number(value.pending || 0)
+    var recent = Array.isArray(value.recent) ? value.recent : []
+    if (JSON.stringify(recent) !== JSON.stringify(recentFiles)) recentFiles = recent
     folderPath = value.folderPath || ""
     cloudFolderName = value.cloudFolderName || "Omarchy"
     cloudUrl = value.cloudUrl || "https://drive.google.com/drive/my-drive"
@@ -138,6 +145,11 @@ Item {
     runControl(baseArgs("timer").concat([enabled ? "--enable" : "--disable", "--interval", String(interval)]))
   }
   function configure() { Quickshell.execDetached(["omarchy-launch-terminal", "python3", configurePath]) }
+  function revealFile(path) {
+    if (revealProcess.running) return
+    revealProcess.command = baseArgs("reveal").concat(["--path", String(path)])
+    revealProcess.running = true
+  }
   function openFolder() { if (folderPath) Quickshell.execDetached(["xdg-open", folderPath]) }
   function openBrowse() { Quickshell.execDetached(["xdg-open", cloudUrl]) }
   function toggleBrowse() { openBrowse() }
@@ -170,6 +182,15 @@ Item {
       if (code === 0) root.applyFolders(foldersOut.text)
       else { root._foldersLoaded = true; root.foldersError = String(foldersErr.text || "Could not list folders") }
       root.refresh()
+    }
+  }
+  Process {
+    id: revealProcess
+    stderr: StdioCollector { id: revealErr; waitForEnd: true }
+    stdout: StdioCollector { waitForEnd: true }
+    onExited: function(code) {
+      root.actionStatus = code === 0 ? "Containing folder opened" : String(revealErr.text || "Could not open containing folder")
+      clearNote.restart()
     }
   }
   Process {

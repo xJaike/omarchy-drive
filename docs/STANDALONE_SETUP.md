@@ -1,7 +1,8 @@
-# Omarchy Drive 2
+# Full setup: Omarchy Drive and the Google account backend
 
 A standalone Google Drive sync app for Linux, with offline files, a live terminal
-dashboard, and an optional Omarchy bar widget. Its Python engine talks directly
+dashboard, and an Omarchy bar panel adapted from
+[hominluo/omarchy-google-drive](https://github.com/hominluo/omarchy-google-drive). Its Python engine talks directly
 to the Google Drive API. **No rclone or Insync is required.**
 
 The default sync pair is:
@@ -18,6 +19,13 @@ sign-in do not transfer file content. You review a preview before the first sync
 an independent backup of important files and use only one sync client on this
 local folder. Replaced and removed content is retained in local backups.
 
+![Google account backend setup stages](images/setup-overview.png)
+
+*Original setup diagram, not a Google Cloud screenshot. Navigation labels were
+checked against Google's documentation on 2026-11-04. No real account data is shown.*
+
+For a visual index and the provenance of every image, see [docs/README.md](README.md).
+
 ## Contents
 
 - [1. Check requirements](#1-check-requirements)
@@ -31,9 +39,9 @@ local folder. Replaced and removed content is retained in local backups.
 - [9. Check access and preview your first sync](#9-check-access-and-preview-your-first-sync)
 - [10. Run your first sync](#10-run-your-first-sync)
 - [11. Enable automatic sync](#11-enable-automatic-sync)
-- [12. Open the dashboard](#12-open-the-dashboard)
+- [12. Open the panel or terminal dashboard](#12-open-the-panel-or-terminal-dashboard)
 - [Use a different folder](#use-a-different-folder)
-- [Optional Omarchy bar widget](#optional-omarchy-bar-widget)
+- [Bar widget controls](#bar-widget-controls)
 - [Daily commands](#daily-commands)
 - [Troubleshooting](#troubleshooting)
 - [Sync rules and limitations](#sync-rules-and-limitations)
@@ -71,7 +79,26 @@ Run installation and app commands as your normal desktop user, without `sudo`.
 
 ## 2. Download and install the app
 
-Choose a permanent checkout location:
+### Recommended: install as an Omarchy plugin
+
+```bash
+omarchy plugin add https://github.com/xJaike/omarchy-drive.git --enable
+bash ~/.config/omarchy/plugins/io.github.xjaike.google-drive/install.sh
+```
+
+The first command adds the icon and panel. The second installs user-service
+helpers. You can instead open the panel and choose **Install and connect**.
+If you have not downloaded a Google OAuth client yet, leave the client-path
+prompt blank and finish account setup in steps 4–8 below.
+
+The plugin ID is **`io.github.xjaike.google-drive`**. Its directory uses that ID,
+even though the repository name is `omarchy-drive`. The widget can show setup
+instructions from its bundled backend before command-line helpers are installed.
+
+### Alternative: run from a source checkout
+
+Use this instead of the plugin-directory installer if you want a standalone
+checkout. Avoid maintaining two helper installations at once.
 
 ```bash
 mkdir -p ~/Projects
@@ -80,46 +107,32 @@ cd ~/Projects/omarchy-drive
 bash install.sh
 ```
 
-If you already have this checkout, follow [Update or migrate an installation](#update-or-migrate-an-installation)
-instead of cloning over it.
+If this checkout already exists, use [Update or migrate an installation](#update-or-migrate-an-installation).
 
-The installer:
+### What installation changes
 
-- Stops and disables the previous `omarchy-drive-sync` schedule.
-- Backs up replaced helper links, service files, and an existing app launcher.
-- Installs commands in `~/.local/bin` and systemd units in your user config.
-- Adds **Omarchy Drive** to the application menu as a terminal app.
-- Leaves automatic sync paused and starts no transfers.
+The installer stops the previous standalone schedule, saves replaced helpers and
+service files, installs commands in `~/.local/bin`, and adds a terminal launcher.
+It leaves automatic sync paused, retains existing credentials and state, and
+starts no file transfers. It does not remove an unrelated sync client: stop
+other clients targeting the same folder before syncing.
 
-Verify installation:
-
-```bash
-omarchy-drive --version
-```
-
-Expected version for this release:
-
-```text
-2.1.0
-```
-
-If the command is not found, try its full path:
+Verify the installed backend:
 
 ```bash
 ~/.local/bin/omarchy-drive --version
 ```
 
-To make the command available in your current terminal:
+Expected version: **2.1.0**. Later steps use the short `omarchy-drive` command.
+If it is not found, use its full path above or add the helper directory to PATH:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-If necessary, add that line to your shell's startup file, such as `~/.zshrc` for
-Zsh or `~/.bashrc` for Bash, and open a new terminal.
-
-**Keep the checkout in place.** Installed helpers link to its source files;
-moving or deleting `~/Projects/omarchy-drive` breaks those links.
+Add that line to your shell startup file if needed, then open a new terminal.
+Keep the source directory used for installation in place: the helpers link to
+its files. For plugin installations, uninstall helpers before removing the plugin.
 
 ## 3. Prepare your Google Drive folder
 
@@ -139,6 +152,11 @@ For another folder name, an explicit folder ID, or automatic remote-folder
 creation, see [Use a different folder](#use-a-different-folder).
 
 ## 4. Create a Google Cloud project
+
+![Choose a project and activate the Google Drive API](images/google-project-api.png)
+
+*Navigation diagram for steps 4–5; this is not a console screenshot.*
+
 
 This app uses your own OAuth client to request access to your Google account.
 The repository does not contain shared Google credentials.
@@ -168,6 +186,11 @@ requirements. Skipping this step causes HTTP 403 `accessNotConfigured`.
 See Google's [API activation instructions](https://developers.google.com/workspace/guides/enable-apis).
 
 ## 6. Configure Google sign-in
+
+![Branding, Audience and Data Access settings](images/google-consent.png)
+
+*Navigation diagram. Your email, project name and publishing choices will differ.*
+
 
 Google's console labels can change. The relevant pages are under **Google Auth
 Platform**: **Branding**, **Audience**, and **Data Access**.
@@ -206,6 +229,11 @@ expires, reconnect as described under [Google sign-in expired](#google-sign-in-e
 
 ## 7. Create and download a Desktop OAuth client
 
+![Create a Desktop app client and download the JSON](images/google-desktop-client.png)
+
+*Navigation diagram. Client IDs and secrets are intentionally omitted.*
+
+
 1. In the same Cloud project, open **Google Auth Platform → Clients**.
 2. Click **Create client**.
 3. Set **Application type** to **Desktop app**.
@@ -232,6 +260,11 @@ See Google's [Desktop OAuth client instructions](https://developers.google.com/w
 Keep the JSON private; do not commit it to Git or paste its contents into an issue.
 
 ## 8. Connect your Google account
+
+![Connect, check, preview and sync sequence](images/connect-and-sync.png)
+
+*Command-flow diagram. Each command is explained in the next steps.*
+
 
 Run:
 
@@ -272,6 +305,16 @@ omarchy-drive setup --continue
 use `setup --client PATH` instead.
 
 ## 9. Check access and preview your first sync
+
+Open the bar panel and review **Keep on disk**. Its checkboxes select directories
+**inside the configured cloud folder**, by default My Drive/Omarchy. The loose
+files checkbox applies to files directly inside that folder. The app does not
+silently select all of My Drive.
+
+Without an explicit selection, all content in the configured pair is included.
+Unticking retains both copies and stops syncing that item. Re-selecting merges
+existing content. Selection changes wait until an active sync finishes.
+
 
 First run a read-only file and access check:
 
@@ -360,9 +403,30 @@ omarchy-drive pause
 Pausing disables the timer and allows an already active transfer to finish.
 Closing the dashboard does not pause scheduled sync.
 
-## 12. Open the dashboard
+## 12. Open the panel or terminal dashboard
 
-Run:
+![Native recent-files view with synthetic data](images/recent-files.png)
+
+*Actual plugin component, rendered with sample files in an isolated preview.
+This screenshot contains no personal account information.*
+
+
+Left-click the Drive bar icon for the native panel. Right-click refreshes status;
+hovering shows current transfers, the waiting queue, and recent file history.
+The panel includes **Sync now**, **Open**, **Drive web**, and the schedule switch.
+**Drive web** opens the configured cloud folder in a browser; it does not mount it.
+
+Recent-file rows show the latest event for each retained file, with upload/download
+indicators, failure labels and readable filenames. Hover a row for its full
+relative path, exact timestamp, known size and saved failure details. Click it
+to show the local containing folder; an absent file falls back to an existing
+parent. The action does not open or execute the downloaded file.
+
+Use **Show history** to expand the four-row history. If the latest sync needs
+attention, the failed row’s **retry icon** starts a full checked sync. The progress card describes
+the active transfer, while the remaining count describes the overall plan.
+
+For a separate terminal dashboard, run:
 
 ```bash
 omarchy-drive
@@ -424,10 +488,10 @@ switch a tracked folder pair; its database is bound to that pair and the local
 root's identity. Do not change `settings.json` to point old sync history at a new
 folder.
 
-## Optional Omarchy bar widget
+## Bar widget controls
 
-The standalone app works without a bar widget. For Omarchy Quattro, install and
-connect the app first using the steps above, then add the plugin:
+If you followed the recommended plugin installation in step 2, the widget is
+already installed. Add it separately only when you used the source-checkout route:
 
 ```bash
 omarchy plugin add https://github.com/xJaike/omarchy-drive.git --enable
@@ -687,6 +751,21 @@ Do not edit stored credentials or session records manually.
 
 ## Update or migrate an installation
 
+### Installed as an Omarchy plugin
+
+```bash
+omarchy-drive pause
+omarchy plugin update io.github.xjaike.google-drive
+bash ~/.config/omarchy/plugins/io.github.xjaike.google-drive/install.sh
+omarchy-drive doctor
+omarchy-drive preview
+```
+
+Preserve local Git changes before updating. The installer leaves automatic sync
+paused; after review, use the panel's switch to resume.
+
+### Installed from a source checkout
+
 For the checkout location used in this guide:
 
 ```bash
@@ -719,7 +798,15 @@ sync job touching the same folder, and update or disable a legacy bar widget.
 
 ## Uninstall
 
-From the checkout:
+For the recommended plugin installation, remove helpers before their source:
+
+```bash
+bash ~/.config/omarchy/plugins/io.github.xjaike.google-drive/uninstall.sh
+omarchy plugin remove io.github.xjaike.google-drive
+```
+
+For a source-checkout installation, run its uninstaller instead:
+
 
 ```bash
 cd ~/Projects/omarchy-drive
@@ -762,4 +849,4 @@ transfers, conflicts, deletion safeguards, installation, and terminal controls.
 Tests do not contact a live Google account. Actual sign-in and end-to-end Google
 Drive compatibility must also be checked with your own client and account.
 
-License: [MIT](LICENSE).
+License: [MIT](../LICENSE).

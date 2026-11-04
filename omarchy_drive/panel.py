@@ -13,6 +13,7 @@ from .auth import Tokens
 from .cli import status as backend_status
 from .drive import API, Drive, FOLDER, component, query_url
 from .http import HTTP
+from .engine import local_path
 from .selection import folder_name
 from .storage import Paths, Store, DriveError, Blocked, atomic_json, read_json
 
@@ -148,7 +149,7 @@ def status(paths):
         warning='Sync scope: Drive/' + settings.get('folder_name', 'Omarchy') + '. Unselected files stay on disk.',
         lastError=view['message'] if kind in ('blocked','offline','error','auth','interrupted') else '',
         detailsTooltip=view['tooltip'].replace('Left: dashboard · Middle: sync now · Right: open folder', 'Left: panel · Right: refresh').replace('Automatic sync: enabled' if not timer else 'Automatic sync: paused', 'Automatic sync: paused' if not timer else 'Automatic sync: enabled'), activityText='\n'.join(detail_lines(view)),
-        current=current, recent=view.get('recent', []), queue=view.get('queue', []),
+        current=current, recent=view.get('recent', []), queue=view.get('queue', []), pending=view.get('pending', 0),
         syncIntervalMin=settings.get('sync_interval_min', 1))
 
 
@@ -209,11 +210,31 @@ def timer(paths, args):
     return {'ok': True, 'timerEnabled': args.enable}
 
 
+def reveal(paths, relative):
+    """Reveal a containing directory only; never launch a downloaded file."""
+    settings = paths.configured()
+    root = Path(settings['local_dir'])
+    if not root.is_dir() or root.is_symlink():
+        raise Blocked('The configured local sync folder is unavailable.')
+    path = local_path(root, relative)
+    directory = path.parent
+    while directory != root and not directory.is_dir():
+        directory = directory.parent
+    if not directory.is_dir():
+        raise Blocked('The containing folder is unavailable.')
+    result = subprocess.run(['xdg-open', str(directory)], capture_output=True, text=True, timeout=10)
+    if result.returncode:
+        raise Blocked('Could not open the containing folder. Check your default file manager.')
+    return {'ok': True}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Standalone Drive panel backend')
     commands = parser.add_subparsers(dest='command', required=True)
     for name in ('status', 'folders', 'sync', 'open-backups'):
         commands.add_parser(name)
+    show = commands.add_parser('reveal')
+    show.add_argument('--path', required=True)
     selection = commands.add_parser('select')
     change = selection.add_mutually_exclusive_group()
     change.add_argument('--add')
@@ -244,6 +265,8 @@ def main(argv=None):
             directory.mkdir(exist_ok=True, mode=0o700)
             subprocess.run(['xdg-open', str(directory)], check=False)
             result = {'ok': True}
+        elif args.command == 'reveal':
+            result = reveal(paths, args.path)
         elif args.command == 'select':
             result = select(paths, args)
         elif args.command == 'timer':

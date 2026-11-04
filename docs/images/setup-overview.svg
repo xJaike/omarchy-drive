@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="900" viewBox="0 0 1280 900" role="img" aria-labelledby="title desc">
+<title id="title">Google Drive backend setup</title>
+<desc id="desc">Original setup diagram, not a Google Cloud screenshot. Read the linked setup guide for commands and current official references.</desc>
+<rect width="1280" height="900" rx="18" fill="#f2f6fa"/>
+<rect x="0" y="0" width="1280" height="12" fill="#166554"/>
+<text x="48" y="58" font-family="DejaVu Sans, sans-serif" font-size="16" font-weight="700" fill="#166554">OMARCHY DRIVE · SETUP GUIDE</text>
+<text x="48" y="104" font-family="DejaVu Sans, sans-serif" font-size="32" font-weight="700" fill="#15283a">Google Drive backend setup</text>
+<text x="48" y="139" font-family="DejaVu Sans, sans-serif" font-size="18" font-weight="400" fill="#35465b">Keep the same Cloud project through the first four steps.</text>
+<path d="M68 212V740" stroke="#b7d3ca" stroke-width="3"/>
+<rect x="110" y="172" width="1122" height="116" rx="12" fill="#ffffff" stroke="#d8e2eb"/>
+<circle cx="68" cy="212" r="22" fill="#166554"/>
+<text x="61" y="219" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="700" fill="#ffffff">1</text>
+<text x="134" y="199" font-family="DejaVu Sans, sans-serif" font-size="13" font-weight="700" fill="#166554">1 · PROJECT</text>
+<text x="134" y="232" font-family="DejaVu Sans, sans-serif" font-size="23" font-weight="700" fill="#15283a">Create or select a project</text>
+<text x="650" y="217" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">Google Cloud Console</text>
+<text x="650" y="245" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">Record which project owns your client.</text>
+<rect x="110" y="304" width="1122" height="116" rx="12" fill="#ffffff" stroke="#d8e2eb"/>
+<circle cx="68" cy="344" r="22" fill="#166554"/>
+<text x="61" y="351" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="700" fill="#ffffff">2</text>
+<text x="134" y="331" font-family="DejaVu Sans, sans-serif" font-size="13" font-weight="700" fill="#166554">2 · API</text>
+<text x="134" y="364" font-family="DejaVu Sans, sans-serif" font-size="23" font-weight="700" fill="#15283a">Enable Google Drive API</text>
+<text x="650" y="349" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">APIs &amp; Services → Library</text>
+<text x="650" y="377" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">Sign-in approval does not enable the API.</text>
+<rect x="110" y="436" width="1122" height="116" rx="12" fill="#ffffff" stroke="#d8e2eb"/>
+<circle cx="68" cy="476" r="22" fill="#166554"/>
+<text x="61" y="483" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="700" fill="#ffffff">3</text>
+<text x="134" y="463" font-family="DejaVu Sans, sans-serif" font-size="13" font-weight="700" fill="#166554">3 · CONSENT</text>
+<text x="134" y="496" font-family="DejaVu Sans, sans-serif" font-size="23" font-weight="700" fill="#15283a">Configure account access</text>
+<text x="650" y="481" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">Branding → Audience → Data Access</text>
+<text x="650" y="509" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">External test app: add your account.</text>
+<rect x="110" y="568" width="1122" height="116" rx="12" fill="#ffffff" stroke="#d8e2eb"/>
+<circle cx="68" cy="608" r="22" fill="#166554"/>
+<text x="61" y="615" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="700" fill="#ffffff">4</text>
+<text x="134" y="595" font-family="DejaVu Sans, sans-serif" font-size="13" font-weight="700" fill="#166554">4 · CLIENT</text>
+<text x="134" y="628" font-family="DejaVu Sans, sans-serif" font-size="23" font-weight="700" fill="#15283a">Create a Desktop app client</text>
+<text x="650" y="613" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">Google Auth Platform → Clients</text>
+<text x="650" y="641" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">Download the OAuth client JSON.</text>
+<rect x="110" y="700" width="1122" height="116" rx="12" fill="#ffffff" stroke="#d8e2eb"/>
+<circle cx="68" cy="740" r="22" fill="#166554"/>
+<text x="61" y="747" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="700" fill="#ffffff">5</text>
+<text x="134" y="727" font-family="DejaVu Sans, sans-serif" font-size="13" font-weight="700" fill="#166554">5 · APP</text>
+<text x="134" y="760" font-family="DejaVu Sans, sans-serif" font-size="23" font-weight="700" fill="#15283a">Connect, preview, then sync</text>
+<text x="650" y="745" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">setup --client PATH → preview → sync</text>
+<text x="650" y="773" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" fill="#35465b">Automatic sync stays paused until enabled.</text>
+<text x="48" y="857" font-family="DejaVu Sans, sans-serif" font-size="15" font-weight="400" fill="#526579">SETUP DIAGRAM · Not a Google Cloud screenshot · Navigation checked 2026-11-04</text>
+<text x="48" y="880" font-family="DejaVu Sans, sans-serif" font-size="13" font-weight="400" fill="#526579">No real accounts, project IDs, credentials or file content are shown.</text>
+</svg>

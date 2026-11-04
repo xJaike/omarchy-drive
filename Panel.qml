@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -25,10 +26,10 @@ Panel {
   readonly property string driveTooltip: drive.detailsTooltip
   readonly property string driveIconState: drive.iconState
 
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
-  readonly property color urgent: bar ? bar.urgent : Color.urgent
-  readonly property color dim: Qt.darker(foreground, 1.55)
-  readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+  readonly property color foreground: Commons.Color.popups.text
+  readonly property color urgent: Commons.Color.urgent
+  readonly property color dim: Commons.Color.muted
+  readonly property string fontFamily: Style.font.family
   readonly property color iconColor: drive.lastResult === "error"
     ? urgent
     : (drive.authenticated ? foreground : dim)
@@ -147,6 +148,8 @@ Panel {
 
   onFolderIndexChanged: scrollCursorIntoView()
 
+  ThemeBridge {}
+
   Service {
     id: drive
     settings: root.settings
@@ -165,8 +168,9 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(400))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(620))
+    padding: 12
+    contentWidth: panel.fittedContentWidth(400)
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, 620)
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -210,48 +214,33 @@ Panel {
             implicitHeight: hero.implicitHeight
             readonly property bool ringVisible: root.cursorActive && root.focusSection === "header"
 
-            PanelHero {
+            RowLayout {
               id: hero
               width: parent.width
-              title: "Google Drive"
-              meta: drive.authenticated
-                ? Model.folderSummary({
-                    selectedCount: drive.selectedCount,
-                    rootFiles: drive.rootFiles,
-                    localBytes: drive.localBytes,
-                    localBytesApprox: drive.localBytesApprox
-                  })
-                : "Not connected"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              iconOpacity: root.driveActive ? 1.0 : 0.5
-              iconComponent: Component {
-                GoogleDriveIcon {
-                  iconSize: Style.font.display
-                  color: root.iconColor
+              spacing: 10
+              GoogleDriveIcon { iconSize: 32; color: root.iconColor }
+              ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 3
+                Text { text: "Google Drive"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: 14; font.weight: Font.DemiBold }
+                Text {
+                  text: drive.authenticated ? Model.folderSummary({selectedCount: drive.selectedCount, rootFiles: drive.rootFiles, localBytes: drive.localBytes, localBytesApprox: drive.localBytesApprox}) : "Not connected"
+                  color: root.dim; font.family: root.fontFamily; font.pixelSize: 10
+                  Layout.fillWidth: true; elide: Text.ElideRight
                 }
               }
-              trailingControl: Component {
-                ToggleSwitch {
-                  id: autoSwitch
-                  visible: drive.installed && drive.authenticated
-                  checked: drive.autoSyncActive
-                  busy: drive.busy
-                  hasCursor: header.ringVisible
-                  foreground: hero.foreground
-                  onHovered: function (on) {
-                    if (on) { root.cursorActive = true; root.focusSection = "header" }
-                  }
-                  onToggled: drive.setAutoSync(!drive.autoSyncActive)
-
-                  PanelToolTip {
-                    visible: autoSwitch.containsMouse
-                    text: drive.autoSyncActive
-                      ? "Automatic sync every " + drive.syncIntervalMin + " min — click to pause"
-                      : "Automatic sync paused — click to resume"
-                    fontFamily: hero.fontFamily
-                  }
+              Column {
+                visible: drive.installed && drive.authenticated
+                spacing: 4
+                Rectangle {
+                  width: 28; height: 14; radius: 7
+                  anchors.horizontalCenter: parent.horizontalCenter
+                  color: drive.autoSyncActive ? Commons.Color.accent : Util.alpha(root.foreground, 0.18)
+                  border.color: header.ringVisible ? root.foreground : "transparent"
+                  Rectangle { x: drive.autoSyncActive ? 16 : 2; y: 2; width: 10; height: 10; radius: 5; color: Commons.Color.background }
+                  MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; enabled: !drive.busy; onClicked: drive.setAutoSync(!drive.autoSyncActive) }
                 }
+                Text { text: "AUTO-SYNC"; font.family: root.fontFamily; font.pixelSize: 9; color: root.dim }
               }
             }
           }
@@ -295,6 +284,11 @@ Panel {
             spacing: Style.space(6)
 
             Button {
+              radius: 3
+              fontSize: 12
+              iconSize: 14
+              horizontalPadding: 8
+              verticalPadding: 6
               text: drive.syncing ? "Syncing…" : "Sync now"
               iconText: "󰑐"
               iconSpinning: drive.syncing
@@ -310,6 +304,11 @@ Panel {
             }
 
             Button {
+              radius: 3
+              fontSize: 12
+              iconSize: 14
+              horizontalPadding: 8
+              verticalPadding: 6
               text: "Open"
               iconText: "󰉋"
               foreground: root.foreground
@@ -323,6 +322,11 @@ Panel {
             }
 
             Button {
+              radius: 3
+              fontSize: 12
+              iconSize: 14
+              horizontalPadding: 8
+              verticalPadding: 6
               text: "Drive web"
               iconText: "󰇧"
               active: false
@@ -339,20 +343,19 @@ Panel {
             }
           }
 
-          Column {
-            visible: drive.authenticated && drive.activityText !== ""
+          RecentFiles {
+            visible: drive.authenticated
             width: parent.width
-            spacing: Style.space(6)
-            PanelSectionHeader { text: "SYNC ACTIVITY"; foreground: root.foreground; fontFamily: root.fontFamily }
-            Text {
-              width: parent.width
-              text: drive.activityText
-              textFormat: Text.PlainText
-              wrapMode: Text.Wrap
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
+            foreground: root.foreground
+            urgent: root.urgent
+            fontFamily: root.fontFamily
+            current: drive.currentTransfer
+            entries: drive.recentFiles
+            remaining: drive.remainingChanges
+            retryEnabled: drive.lastResult === "error" && !drive.busy && !drive.syncing && drive.installed
+            onRevealRequested: function(path) { drive.revealFile(path) }
+            onRetryRequested: drive.syncNow()
+            onInteraction: root.cursorActive = false
           }
 
           PanelSeparator {

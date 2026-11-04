@@ -192,6 +192,8 @@ class Activity:
 
     def add_recent(self, action, path, state='completed', size_bytes=0):
         entry = dict(action=action, path=path, state=state, size=size_bytes, time=time.time())
+        if state == 'failed':
+            entry['error'] = self.data.get('last_error', '')
         self.data['recent'] = [entry, *self.data.get('recent', [])][:20]
 
     def complete(self, action, skipped=False):
@@ -219,6 +221,7 @@ class Activity:
     def failure(self, kind, message):
         self.failed = True
         active = self.data.get('active')
+        self.data['last_error'] = message
         if active:
             self.add_recent(active['action'], active['path'], state='failed')
         self.data.update(phase='interrupted' if kind == 'interrupted' else 'failed', last_error=message, finished=time.time())

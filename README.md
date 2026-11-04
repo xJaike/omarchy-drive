@@ -17,6 +17,24 @@ up-to-date, paused, offline and error states. Hover for filenames, per-file
 percentage, transfer rate, ETA, waiting files and recent activity. Left-click
 opens the panel; right-click refreshes it.
 
+![Native recent-files view with sample data](docs/images/recent-files.png)
+
+*The actual `RecentFiles.qml` component rendered with sample files. No personal
+account or file history is shown.*
+
+## Full setup documentation
+
+Start with the [illustrated setup guide](docs/STANDALONE_SETUP.md). It covers
+plugin installation, Google Cloud project selection, Drive API activation,
+OAuth consent, Desktop client creation, browser sign-in, folder selection,
+first-sync review, automatic sync and troubleshooting.
+
+![Google Drive backend setup overview](docs/images/setup-overview.png)
+
+*Original setup diagram, not a Google Cloud screenshot. Navigation checked
+2026-11-04. See the [visual guide index](docs/README.md) for individual figures
+and current official references.*
+
 ## Install on Omarchy
 
 Requires Omarchy Quattro, Python 3.11+ with SQLite, systemd user services, a
@@ -45,40 +63,52 @@ syncing. This fork has its own plugin ID: `io.github.xjaike.google-drive`.
 
 ## Google account setup
 
-Use your own Google Desktop OAuth client. If you already used our standalone
-backend, this fork reuses its existing Google connection, folder pair and SQLite
-history. It does not read credentials from another sync client.
+Use your own **Desktop OAuth client**, created in a Google Cloud project you
+control. Existing standalone-backend users keep their saved connection, folder
+pair and sync history; credentials from other sync clients are not imported.
 
-1. Create/select a project in [Google Cloud Console](https://console.cloud.google.com/).
-2. Enable the **Google Drive API** in that project. OAuth sign-in alone does not
-   activate the API.
-3. Configure **Google Auth Platform → Branding, Audience, Data Access**. For a
-   personal Testing app, add your Google account as a test user and add scope
-   `https://www.googleapis.com/auth/drive`.
-4. Create a **Desktop app** under **Clients** and download its JSON.
-5. Create one **Omarchy** folder at the root of My Drive, then connect:
+| Stage | Procedure | Visual guide |
+| --- | --- | --- |
+| 1. Project | Create/select a Cloud project and keep it selected for the next stages. | [Project and API](docs/images/google-project-api.png) |
+| 2. API | Enable **Google Drive API** in that project. Sign-in approval alone does not enable it. | [Activation instructions](docs/STANDALONE_SETUP.md#5-enable-the-google-drive-api) |
+| 3. Consent | Configure **Branding → Audience → Data Access**. For an External Testing app, add your account as a test user and add the Drive scope. | [Consent settings](docs/images/google-consent.png) |
+| 4. Client | Under **Clients**, create a **Desktop app** OAuth client and download its JSON. | [Desktop client](docs/images/google-desktop-client.png) |
+| 5. Connect | Keep the terminal open, sign in in the browser, then check and preview before syncing. | [Connection sequence](docs/images/connect-and-sync.png) |
 
-   ```bash
-   ~/.local/bin/omarchy-drive setup --client ~/Downloads/YOUR_DESKTOP_CLIENT.json
-   ```
+Create an **Omarchy** folder at the root of My Drive. Rename your downloaded
+client file to `omarchy-drive-client.json` for the examples below, then run:
 
-6. Review proposed changes before syncing:
+```bash
+chmod 600 ~/Downloads/omarchy-drive-client.json
+~/.local/bin/omarchy-drive setup --client ~/Downloads/omarchy-drive-client.json
+~/.local/bin/omarchy-drive doctor
+~/.local/bin/omarchy-drive preview
+```
 
-   ```bash
-   ~/.local/bin/omarchy-drive preview
-   ```
+Before applying the preview, choose folders in the panel. First setup transfers
+no file content. When the plan looks right, run the first sync:
 
-For a disabled-API error after successful sign-in, enable the Drive API in the
-client's project, allow activation to take effect, then run:
+```bash
+~/.local/bin/omarchy-drive sync
+```
+
+After success, enable the panel's automatic-sync switch if desired. Keep it off
+while reviewing the initial setup.
+
+The required scope is `https://www.googleapis.com/auth/drive`; it grants broad
+Drive access. Sync operations are scoped by the configured folder ID. A Web app
+client, API key or service-account JSON cannot replace a Desktop OAuth client.
+
+If Google sign-in succeeds but setup reports **403 accessNotConfigured**, enable
+the Drive API in the client's project, allow activation to take effect, then run:
 
 ```bash
 ~/.local/bin/omarchy-drive setup --continue
 ```
 
-The full installation, OAuth, troubleshooting and backup guide is in
-[docs/STANDALONE_SETUP.md](docs/STANDALONE_SETUP.md). External Google apps left in
-Testing can have seven-day refresh-token expiry; that guide explains the relevant
-Google publishing settings and reconnection steps.
+For an External app left in Testing, refresh tokens can expire after seven days.
+See the full guide for publishing-status considerations, reconnection, custom
+folder pairs and troubleshooting. Publishing is distinct from Google verification.
 
 ## Panel controls
 
@@ -107,6 +137,22 @@ baseline. No cleanup button permanently removes deselected files.
 The upstream **Browse all** mount is replaced by **Drive web**. This backend has
 no virtual filesystem or on-demand FUSE mount. Native Google Docs/Sheets/Slides
 and shortcuts remain available in the browser and are skipped in offline sync.
+
+## Recent files and transfers
+
+The current transfer has a separate progress card with direction, filename,
+parent folder, percentage, transferred bytes, speed and ETA. Backup transfers
+are identified separately from uploads and downloads.
+
+Recent files show their latest activity in individual rows: filename, parent
+folder, status and relative time. Long names are elided in the middle; hover
+for the full path, exact timestamp, known size and any saved error. Four rows
+are shown initially; **Show history** expands the retained history.
+
+Click a row, or focus it and press Enter/Space, to show its containing local
+folder. Missing files fall back to the nearest existing parent. This action
+never executes or opens a downloaded file. The failed row’s **retry icon**, when available,
+rechecks and retries the complete sync rather than targeting an individual file.
 
 ## Sync behavior
 
@@ -179,3 +225,6 @@ own OAuth client. This is an independent fork; upstream's sync-engine behavior
 and release claims do not automatically apply to it.
 
 License: [MIT](LICENSE).
+
+The panel follows Omarchy’s active theme automatically, including popup colors,
+status accents, muted text, and the shell font. Theme changes apply live.

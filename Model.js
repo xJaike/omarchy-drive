@@ -153,3 +153,75 @@ if (typeof module !== "undefined") {
     shortHomePath: shortHomePath
   }
 }
+
+// Keep activity presentation separate from raw paths and transfer bookkeeping.
+function fileName(path) {
+  var parts = String(path || "").split("/")
+  return cleanText(parts.pop() || "Untitled file")
+}
+
+function parentPath(path) {
+  var parts = String(path || "").split("/")
+  parts.pop()
+  return cleanText(parts.join("/") || "Synced folder")
+}
+
+function cleanText(value) {
+  return String(value || "").replace(/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/g, " ")
+}
+
+function actionLabel(action, failed) {
+  if (failed) return ({upload: "Upload failed", download: "Download failed"})[action] || "Sync failed"
+  return ({upload: "Uploaded", download: "Downloaded", conflict: "Both versions kept",
+    "mkdir-local": "Folder created", "mkdir-remote": "Folder created",
+    "archive-local": "Archived locally", "trash-remote": "Moved to Trash"})[action] || "Synced"
+}
+
+function activityGlyph(action, failed) {
+  if (failed) return "!"
+  return ({upload: "↑", download: "↓", conflict: "⇄", "mkdir-local": "+",
+    "mkdir-remote": "+", "archive-local": "↙", "trash-remote": "−"})[action] || "✓"
+}
+
+function recentFileRows(entries) {
+  var rows = [], seen = ({})
+  var ordered = (Array.isArray(entries) ? entries : []).filter(function(entry) {
+    return entry && typeof entry === "object" && entry.path
+  }).sort(function(a, b) {
+    return Number(b.time || 0) - Number(a.time || 0)
+  })
+  for (var i = 0; i < ordered.length; i++) {
+    var entry = ordered[i]
+    if (!entry || !entry.path) continue
+    var key = "$" + entry.path
+    if (seen[key]) continue
+    seen[key] = true
+    var failed = entry.state === "failed"
+    rows.push({path: entry.path, name: fileName(entry.path), parent: parentPath(entry.path),
+      action: entry.action || "sync", label: actionLabel(entry.action, failed),
+      glyph: activityGlyph(entry.action, failed), failed: failed,
+      time: Number(entry.time || 0), size: Number(entry.size || 0), error: cleanText(entry.error || "")})
+  }
+  return rows
+}
+
+if (typeof module !== "undefined") {
+  Object.assign(module.exports, {fileName: fileName, parentPath: parentPath,
+    cleanText: cleanText, actionLabel: actionLabel, activityGlyph: activityGlyph,
+    recentFileRows: recentFileRows})
+}
+
+function transferEta(seconds) {
+  var value = Math.max(0, Math.ceil(Number(seconds) || 0))
+  if (value < 60) return value + "s"
+  if (value < 3600) return Math.floor(value / 60) + "m " + (value % 60) + "s"
+  return Math.floor(value / 3600) + "h " + Math.floor((value % 3600) / 60) + "m"
+}
+
+function wrappedPath(value) {
+  var text = cleanText(value), lines = []
+  while (text.length > 56) { lines.push(text.slice(0,56)); text = text.slice(56) }
+  lines.push(text)
+  return lines.join("\n")
+}
+if (typeof module !== "undefined") Object.assign(module.exports, {transferEta:transferEta, wrappedPath:wrappedPath})
