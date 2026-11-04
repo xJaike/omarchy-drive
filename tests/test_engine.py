@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import os
 from pathlib import Path
@@ -352,6 +353,26 @@ class EngineTests(unittest.TestCase):
         self.assertEqual((self.local / 'a.txt').read_bytes(), b'local')
         self.assertEqual(self.drive.files['Sync/a.txt']['content'], b'remote')
         self.assertFalse([call for call in self.drive.calls if call[0] == 'upload'])
+
+    def test_snapshot_changes_no_settings_so_a_second_one_still_merges(self):
+        self.settings['home_folders']['Sync'] = {}
+        self.drive.files['Sync'] = {'id': 'sync', 'kind': 'dir', 'hash': None, 'name': 'Sync'}
+        row = self.drive.put('Sync/stale', b'cloud')
+        self.store.remember('Sync/stale', {'id': row['id'], 'hash': row['hash']})
+        before = copy.deepcopy(self.settings)
+        engine = self.engine()
+        first, second = engine.snapshot(), engine.snapshot()
+        self.assertEqual([(action.kind, action.path) for action in first], [('download', 'Sync/stale')])
+        self.assertEqual(second, first)
+        self.assertEqual(self.engine().snapshot(), first)
+        self.assertEqual(self.settings, before)
+
+    def test_identity_is_recorded_when_the_sync_commits_to_the_merge(self):
+        self.settings['home_folders']['Sync'] = {}
+        self.engine().sync()
+        info = self.local.stat()
+        self.assertEqual(self.settings['home_folders']['Sync'], {'identity': [info.st_dev, info.st_ino]})
+        self.assertEqual(read_json(self.paths.settings)['home_folders']['Sync'], {'identity': [info.st_dev, info.st_ino]})
 
     def reset_scenario(self):
         for child in self.local.iterdir():

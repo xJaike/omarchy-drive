@@ -179,8 +179,6 @@ class Engine:
         for name, source in sources.items():
             if not source.exists():
                 continue  # Drive-only, so plan emits mkdir-local.
-            if name in self.merging:
-                record_identity(self.settings, name, source)
             if included(name):
                 self.local[name] = {'kind': 'dir'}
                 self.local.update(scan_local(source, name + '/', included))
@@ -195,8 +193,11 @@ class Engine:
         """Clear the baseline before saving, so a crash leads to a merge, never a deletion."""
         for name in self.merging:
             self.store.forget_subtree(name)
-        homes = self.settings.get('home_folders', {})
-        if any((homes.get(name) or {}).get('identity') is not None for name in self.merging):
+        sources = mappings(self.settings, self.paths)
+        found = [name for name in self.merging if sources[name].exists()]
+        for name in found:
+            record_identity(self.settings, name, sources[name])
+        if found:
             atomic_json(self.paths.settings, self.settings)
 
     def checked_local(self, path, expected):
