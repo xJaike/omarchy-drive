@@ -123,7 +123,7 @@ def run_sync(args, paths):
             return 0
         except (DriveError, sqlite3.Error, OSError, ValueError, KeyboardInterrupt) as error:
             if activity:
-                activity.failure(*error_details(error))
+                activity.failure(*error_details(error), getattr(error, 'path', None))
             raise
         finally:
             if store is not None:
@@ -310,6 +310,6 @@ def main(argv=None):
         kind, message = error_details(error)
         activity = getattr(args, '_activity', None)
         if command == 'sync' and not (activity and activity.failed) and not (isinstance(error, Blocked) and 'Another sync' in str(error)):
-            Activity(paths).failure(kind, message)
+            Activity(paths).failure(kind, message, getattr(error, 'path', None))
         print(kind.upper() + ': ' + safe(message), file=sys.stderr)
         return 1

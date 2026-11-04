@@ -1,12 +1,14 @@
 import hashlib
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from omarchy_drive.drive import FOLDER
 from omarchy_drive.engine import Engine, plan, scan_local
+from omarchy_drive.home_folders import record_identity
 from omarchy_drive.storage import Blocked, Offline, Paths, Store, read_json
 
 
@@ -350,3 +352,86 @@ class EngineTests(unittest.TestCase):
         self.assertEqual((self.local / 'a.txt').read_bytes(), b'local')
         self.assertEqual(self.drive.files['Sync/a.txt']['content'], b'remote')
         self.assertFalse([call for call in self.drive.calls if call[0] == 'upload'])
+
+    def reset_scenario(self):
+        for child in self.local.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        self.drive.files.clear()
+        self.store.forget_subtree('Sync')
+
+    def test_each_stable_problem_reports_its_path(self):
+        def symlink():
+            (self.local / 'link').symlink_to(self.base / 'outside')
+        def google_doc():
+            self.write('doc', b'local')
+            self.drive.files['Sync/doc'] = {'id': 'doc', 'kind': 'unsupported', 'hash': None}
+        def local_file_drive_folder():
+            self.write('clash', b'file')
+            self.drive.files['Sync/clash'] = {'id': 'clash', 'kind': 'dir', 'hash': None}
+        def local_folder_drive_file():
+            (self.local / 'clash').mkdir()
+            self.drive.put('Sync/clash', b'file')
+        def tracked_file_became_folder():
+            (self.local / 'clash').mkdir()
+            self.store.remember('Sync/clash', {'id': 'x', 'hash': 'y'})
+        table = ((symlink, 'Sync/link'), (google_doc, 'Sync/doc'), (local_file_drive_folder, 'Sync/clash'),
+                 (local_folder_drive_file, 'Sync/clash'), (tracked_file_became_folder, 'Sync/clash'))
+        for arrange, path in table:
+            with self.subTest(problem=arrange.__name__):
+                self.reset_scenario()
+                arrange()
+                with self.assertRaises(Blocked) as caught:
+                    self.engine().sync()
+                self.assertEqual(caught.exception.path, path)
+                self.assertIn(path, str(caught.exception))
+                self.assertEqual(self.drive.calls, [])
+
+    def test_transient_problems_report_no_path(self):
+        self.write('a', b'base')
+        self.engine().sync()
+        self.drive.put('Sync/a', b'cloud edit', self.drive.files['Sync/a']['id'])
+        self.drive.before_download = lambda: self.write('a', b'editing now')
+        with self.assertRaisesRegex(Blocked, 'changed during sync') as changed:
+            self.engine().sync()
+        self.assertIsNone(changed.exception.path)
+        self.local.rename(self.base / 'old')
+        self.local.mkdir()
+        with self.assertRaisesRegex(Blocked, 'replaced') as replaced:
+            self.engine().sync()
+        self.assertIsNone(replaced.exception.path)
+
+    def deletions(self, **folders):
+        paths = [f'{folder}/{i}' for folder, count in folders.items() for i in range(count)]
+        row = {'id': 'x', 'hash': 'y'}
+        return plan({}, {path: dict(row, kind='file') for path in paths}, {path: row for path in paths})
+
+    def test_deletion_limit_names_the_most_affected_folder(self):
+        with self.assertRaises(Blocked) as caught:
+            self.deletions(Music=1, Work=25)
+        message = str(caught.exception)
+        self.assertEqual(message, '26 deletions need review, mostly in Work. If you moved that folder, restore it or untick it. '
+                                  'To apply them anyway, review omarchy-drive preview, then run sync --allow-many-deletes.')
+        self.assertLess(message.index('Work'), message.index('--allow-many-deletes'))
+        self.assertIsNone(caught.exception.path)
+
+    def test_deletion_limit_breaks_a_tie_alphabetically(self):
+        with self.assertRaisesRegex(Blocked, 'mostly in Alpha'):
+            self.deletions(Zed=11, Alpha=11)
+
+    def test_deletion_limit_stops_a_real_sync_naming_the_folder(self):
+        (self.home / 'Music').mkdir()
+        record_identity(self.settings, 'Music', self.home / 'Music')
+        for i in range(24):
+            self.write(str(i), b'a')
+        (self.home / 'Music' / 'song').write_bytes(b'b')
+        self.engine().sync()
+        for i in range(7):
+            (self.local / str(i)).unlink()
+        (self.home / 'Music' / 'song').unlink()
+        self.drive.calls.clear()
+        with self.assertRaisesRegex(Blocked, 'mostly in Sync'):
+            self.engine().sync()
+        self.assertEqual(self.drive.calls, [])

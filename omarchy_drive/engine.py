@@ -1,4 +1,5 @@
 """Content-based two-way reconciliation, independent of any third-party sync tool."""
+from collections import Counter
 from dataclasses import dataclass
 import hashlib
 import os
@@ -94,13 +95,13 @@ def plan(local, remote, baseline, max_deletes=20, allow_many_deletes=False):
         left, right, prior = local.get(path), remote.get(path), baseline.get(path)
         if right and right['kind'] == 'unsupported':
             if left:
-                raise Blocked(f'A Google document or shortcut conflicts with a local path: {path}')
+                raise Blocked(f'A Google document or shortcut conflicts with a local path: {path}', path=path)
             continue
         if left and right and left['kind'] != right['kind']:
-            raise Blocked(f'File/folder type conflict: {path}. Rename one side before syncing.')
+            raise Blocked(f'File/folder type conflict: {path}. Rename one side before syncing.', path=path)
         if left and left['kind'] == 'dir' or right and right['kind'] == 'dir':
             if prior:
-                raise Blocked(f'A tracked file became a folder: {path}')
+                raise Blocked(f'A tracked file became a folder: {path}', path=path)
             if not left:
                 actions.append(Action('mkdir-local', path))
             elif not right:
@@ -132,9 +133,12 @@ def plan(local, remote, baseline, max_deletes=20, allow_many_deletes=False):
                 actions.append(Action('download', path, 'Preserve cloud edits' if prior else 'New Drive file'))
         elif prior:
             actions.append(Action('forget', path))
-    deletions = sum(a.kind in ('archive-local', 'trash-remote') for a in actions)
+    removed = Counter(a.path.partition('/')[0] for a in actions if a.kind in ('archive-local', 'trash-remote'))
+    deletions = sum(removed.values())
     if not allow_many_deletes and (deletions > max_deletes or len(baseline) >= 20 and deletions / len(baseline) > .25):
-        raise Blocked(f'{deletions} deletions need review. Run omarchy-drive preview, then use sync --allow-many-deletes only if intended.')
+        folder = min(removed, key=lambda name: (-removed[name], name))
+        raise Blocked(f'{deletions} deletions need review, mostly in {folder}. If you moved that folder, restore it or untick it. '
+                      'To apply them anyway, review omarchy-drive preview, then run sync --allow-many-deletes.')
     # Make new content durable before processing removals. Parent directories first.
     priorities = {'mkdir-local': 0, 'mkdir-remote': 0, 'remember': 1, 'upload': 2,
                   'download': 2, 'conflict': 2, 'archive-local': 3, 'trash-remote': 3, 'forget': 4}

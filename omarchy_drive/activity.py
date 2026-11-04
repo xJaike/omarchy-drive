@@ -140,7 +140,7 @@ class Activity:
     def start(self):
         self.started = True
         self.data.update(current=None, queue=[], pending=0, queued=0, active=None, total=0, completed=0,
-                         phase='scanning', started=time.time(), finished=None, last_error=None,
+                         phase='scanning', started=time.time(), finished=None, last_error=None, blockedPath=None,
                          summary=dict(uploaded=0, downloaded=0, conflicts=0, removed=0, folders=0))
         self.write(message='Checking local files and Google Drive…')
 
@@ -218,10 +218,11 @@ class Activity:
         message = 'Up to date · ' + summary_line(self.data) if changed else 'Everything is up to date'
         self.write('success', message)
 
-    def failure(self, kind, message):
+    def failure(self, kind, message, path=None):
         self.failed = True
         active = self.data.get('active')
         self.data['last_error'] = message
+        self.data['blockedPath'] = path
         if active:
             self.add_recent(active['action'], active['path'], state='failed')
         self.data.update(phase='interrupted' if kind == 'interrupted' else 'failed', last_error=message, finished=time.time())

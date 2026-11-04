@@ -1,11 +1,16 @@
+import contextlib
+import io
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from omarchy_drive.activity import Activity, current_lines, detail_lines
-from omarchy_drive.cli import status
+from omarchy_drive.cli import main, status
 from omarchy_drive.engine import Action
-from omarchy_drive.storage import Paths, Store, atomic_json, read_json
+from omarchy_drive.storage import Blocked, Paths, Store, atomic_json, read_json
+from tests.test_engine import MemoryDrive
 
 
 class ActivityTests(unittest.TestCase):
@@ -19,7 +24,7 @@ class ActivityTests(unittest.TestCase):
         self.paths.settings = self.paths.config / 'settings.json'
         self.paths.status = self.paths.state / 'status.json'
         self.paths.prepare()
-        atomic_json(self.paths.settings, {'local_dir': '/home/example/GoogleDrive', 'folder_name': 'Omarchy', 'folder_id': 'root'})
+        atomic_json(self.paths.settings, {'folder_name': 'Omarchy', 'folder_id': 'root'})
         self.now = 0
         self.activity = Activity(self.paths, lambda: self.now)
 
@@ -138,3 +143,57 @@ class ActivityTests(unittest.TestCase):
             displayed = status(self.paths)
         self.assertTrue(all(len(line) <= 84 for line in displayed['tooltip'].splitlines()))
         self.assertNotIn('\x1b', displayed['tooltip'])
+
+    def test_failure_writes_and_start_clears_blocked_path(self):
+        self.activity.start()
+        self.activity.failure('blocked', 'm', path='Work/a')
+        self.assertEqual(read_json(self.paths.status)['blockedPath'], 'Work/a')
+        Activity(self.paths).start()
+        self.assertIsNone(read_json(self.paths.status).get('blockedPath'))
+
+    def test_failure_with_no_path_replaces_an_earlier_path(self):
+        self.activity.failure('blocked', 'm', path='Work/a')
+        Activity(self.paths).failure('offline', 'n')
+        self.assertIsNone(read_json(self.paths.status).get('blockedPath'))
+
+
+class BlockedPathFromCommandTests(unittest.TestCase):
+    """main and run_sync must hand the error's path to the status file, with a real engine and filesystem."""
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.home = Path(temporary.name)
+        environment = patch.dict(os.environ, {
+            'HOME': str(self.home), 'XDG_CONFIG_HOME': str(self.home/'.config'),
+            'XDG_STATE_HOME': str(self.home/'.state'), 'XDG_DATA_HOME': str(self.home/'.data')})
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.paths = Paths()
+        self.paths.prepare()
+        atomic_json(self.paths.settings, {'folder_id': 'root', 'home_folders': {'Work': {}}})
+        (self.home/'Work').mkdir()
+
+    def sync(self):
+        def context(paths):
+            store = Store(paths.state)
+            self.addCleanup(store.close)
+            return paths.configured(), store, MemoryDrive()
+        with patch('omarchy_drive.cli.context', context), contextlib.redirect_stderr(io.StringIO()):
+            return main(['sync'])
+
+    def test_sync_failure_reaches_status_with_its_path(self):
+        (self.home/'Work'/'link').symlink_to(self.home)
+        self.assertEqual(self.sync(), 1)
+        self.assertEqual(read_json(self.paths.status)['blockedPath'], 'Work/link')
+
+    def test_failure_before_the_sync_starts_reaches_status_with_its_path(self):
+        with patch('omarchy_drive.cli.migrate', side_effect=Blocked('m', path='Work/a')):
+            self.assertEqual(self.sync(), 1)
+        self.assertEqual(read_json(self.paths.status)['blockedPath'], 'Work/a')
+
+    def test_next_sync_clears_the_path(self):
+        (self.home/'Work'/'link').symlink_to(self.home)
+        self.sync()
+        (self.home/'Work'/'link').unlink()
+        self.assertEqual(self.sync(), 0)
+        self.assertIsNone(read_json(self.paths.status).get('blockedPath'))
