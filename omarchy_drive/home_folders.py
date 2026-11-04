@@ -17,11 +17,11 @@ def validate(name, entry, state):
     identity = entry.get('identity') if entry else None
     home = Path.home()
     source = home / name
-    if home.is_symlink():
-        raise Blocked(f'Restore ~/{name} as an ordinary folder before syncing.')
     drive_only = entry is not None and identity is None and not os.path.lexists(source)
-    if not drive_only and (source.is_symlink() or not source.is_dir() or source.is_mount()):
-        raise Blocked(f'Restore ~/{name} as an ordinary folder before syncing.')
+    if not drive_only and not os.path.lexists(source):
+        raise Blocked(f'~/{name} is missing. Restore it, or untick it to stop syncing.')
+    if home.is_symlink() or not drive_only and (source.is_symlink() or not source.is_dir() or source.is_mount()):
+        raise Blocked(f'~/{name} is not an ordinary folder. Untick it, or restore it as a folder.')
     info = (home if drive_only else source).stat()
     # archive_source moves originals into the backup directory with os.rename.
     if info.st_dev != Path(state).stat().st_dev:

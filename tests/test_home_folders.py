@@ -93,7 +93,7 @@ class HomeFolderTests(HomeFolderCase):
         self.enable()
         self.engine().sync()
         self.documents.rename(self.home/'moved')
-        with self.assertRaises(Blocked):
+        with self.assertRaisesRegex(Blocked, 'is missing'):
             self.engine().sync()
         self.documents.mkdir()
         with self.assertRaisesRegex(Blocked, 'replaced'):
@@ -113,6 +113,42 @@ class HomeFolderTests(HomeFolderCase):
         self.assertEqual(choices(self.paths.configured(), self.paths), [
             dict(name='Documents', selected=False, error=''),
             dict(name='GoogleDrive', selected=False, error='')])
+
+    def assert_folder_problem(self, attempt, message):
+        with self.assertRaises(Blocked) as caught:
+            attempt()
+        self.assertEqual(str(caught.exception), message)
+        self.assertIsNone(caught.exception.path)  # A path would offer Exclude this, which cannot fix these.
+
+    def test_ticked_folder_problems_offer_unticking(self):
+        (self.documents/'report.txt').write_text('safe')
+        self.enable()
+        self.engine().sync()
+        self.documents.rename(self.home/'moved')
+        self.assert_folder_problem(self.engine().sync, '~/Documents is missing. Restore it, or untick it to stop syncing.')
+        self.documents.write_text('a file now')
+        self.assert_folder_problem(self.engine().sync, '~/Documents is not an ordinary folder. Untick it, or restore it as a folder.')
+        self.documents.unlink()
+        self.documents.mkdir()
+        self.assert_folder_problem(self.engine().sync, '~/Documents was replaced. Untick it and tick it again to merge safely.')
+        self.assertEqual(self.drive.files['Documents/report.txt']['content'], b'safe')
+
+    def test_ticking_something_that_is_not_a_folder_never_says_restore_alone(self):
+        (self.home/'file.txt').write_text('a file')
+        (self.home/'Link').symlink_to(self.documents)
+        (self.home/'Broken').symlink_to(self.home/'nowhere')
+        (self.home/'Mounted').mkdir()
+        for name in ('file.txt', 'Link', 'Broken', 'Mounted'):
+            with self.subTest(name=name), patch.object(Path, 'is_mount', lambda path: path.name == 'Mounted'):
+                self.assert_folder_problem(lambda: select(self.paths, name, True),
+                                           f'~/{name} is not an ordinary folder. Untick it, or restore it as a folder.')
+
+    def test_symlinked_home_is_not_an_ordinary_folder(self):
+        link = self.home/'.linked-home'
+        link.symlink_to(self.home)
+        with patch.dict(os.environ, {'HOME': str(link)}):
+            self.assert_folder_problem(lambda: validate('Documents', None, self.paths.state),
+                                       '~/Documents is not an ordinary folder. Untick it, or restore it as a folder.')
 
     def test_reserved_marker_name_cannot_be_ticked(self):
         marker = self.home/'RCLONE_TEST'
@@ -512,7 +548,7 @@ class HomeFolderTests(HomeFolderCase):
         self.enable()
         self.documents.rmdir()
         self.cache(Documents='drive')
-        with self.assertRaisesRegex(Blocked, 'Restore'):
+        with self.assertRaisesRegex(Blocked, 'is missing'):
             self.enable()
         select(self.paths, 'Documents', False)  # Unticking must always work.
         self.assertEqual(self.paths.configured()['home_folders'], {})
@@ -706,7 +742,7 @@ class HomeFolderTests(HomeFolderCase):
         rows = choices(self.paths.configured(), self.paths)
         self.assertEqual([row['name'] for row in rows], ['Documents'])
         self.assertTrue(rows[0]['selected'])
-        self.assertIn('Restore', rows[0]['error'])
+        self.assertEqual(rows[0]['error'], '~/Documents is missing. Restore it, or untick it to stop syncing.')
 
     def test_choices_list_a_drive_only_tick_without_error(self):
         self.cache(Archive='drive')
