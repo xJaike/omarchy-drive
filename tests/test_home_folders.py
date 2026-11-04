@@ -908,3 +908,103 @@ class NoOpSelectionTests(HomeFolderCase):
         select(self.paths, 'Documents', False)
         self.assertEqual(self.store.baseline(), {})
         self.assertNotIn('Documents', self.paths.configured()['home_folders'])
+
+
+class FolderGoneFromDriveTests(HomeFolderCase):
+    """A ticked folder gone from Drive stops the sync, like one gone from home."""
+
+    MESSAGE = '~/Documents is no longer in Drive/{}. Restore it on Drive, or untick it to stop syncing.'
+
+    def synced(self, *names, **settings):
+        for name in names:
+            target = self.documents/name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(name.encode())
+        self.settings(**settings)
+        self.enable()
+        self.engine().sync()
+        self.drive.calls.clear()
+
+    def remove_from_drive(self):
+        for path in [path for path in self.drive.files if path.partition('/')[0] == 'Documents']:
+            del self.drive.files[path]
+
+    def assert_stops(self, attempt, folder_name):
+        files = {path.relative_to(self.documents): path.read_bytes() for path in self.documents.rglob('*') if path.is_file()}
+        drive = dict(self.drive.files)
+        baseline = self.store.baseline()
+        settings = self.paths.settings.read_bytes()
+        with self.assertRaises(Blocked) as caught:
+            attempt()
+        self.assertEqual(str(caught.exception), self.MESSAGE.format(folder_name))
+        self.assertEqual(caught.exception.path, 'Documents')  # The panel offers Untick this.
+        self.assertEqual({path.relative_to(self.documents): path.read_bytes() for path in self.documents.rglob('*') if path.is_file()}, files)
+        self.assertEqual(self.drive.files, drive)
+        self.assertEqual(self.drive.calls, [])
+        self.assertEqual(self.store.baseline(), baseline)
+        self.assertEqual(self.paths.settings.read_bytes(), settings)
+        self.assertFalse(self.paths.backups.exists())
+
+    def test_small_history_stops_with_no_change_on_either_side(self):
+        self.synced('report.txt', folder_name='Omarchy')
+        self.remove_from_drive()
+        self.assert_stops(self.engine().sync, 'Omarchy')
+
+    def test_history_inside_the_deletion_limit_stops_too(self):
+        self.synced(*(f'sub/{number}.txt' for number in range(20)), folder_name='Omarchy')
+        self.remove_from_drive()
+        self.assert_stops(self.engine().sync, 'Omarchy')
+
+    def test_preview_stops_too(self):
+        self.synced('report.txt', folder_name='Omarchy')
+        self.remove_from_drive()
+        self.assert_stops(self.engine().snapshot, 'Omarchy')
+
+    def test_an_unknown_parent_folder_name_reads_as_drive(self):
+        self.synced('report.txt')
+        self.remove_from_drive()
+        self.assert_stops(self.engine().sync, 'Drive')
+
+    def test_first_sync_still_creates_the_drive_folder(self):
+        (self.documents/'report.txt').write_bytes(b'report')
+        self.enable()
+        self.engine().sync()
+        self.assertEqual(self.drive.files['Documents']['kind'], 'dir')
+        self.assertEqual(self.drive.files['Documents/report.txt']['content'], b'report')
+
+    def test_history_only_under_an_exclusion_does_not_stop(self):
+        self.synced('kept/report.txt')
+        set_excluded(self.paths, 'Documents/kept', True)
+        self.store.remember('Documents/kept/report.txt', {'id': 'x', 'hash': 'y'})
+        self.remove_from_drive()
+        self.engine().sync()
+        self.assertEqual(self.drive.files['Documents']['kind'], 'dir')
+        self.assertEqual((self.documents/'kept'/'report.txt').read_bytes(), b'kept/report.txt')
+        self.assertFalse(self.paths.backups.exists())
+
+    def test_only_the_folder_gone_is_named_and_the_other_is_untouched(self):
+        self.synced('report.txt', folder_name='Omarchy')
+        (self.home/'Alpha').mkdir()
+        (self.home/'Alpha'/'a.txt').write_bytes(b'a')
+        select(self.paths, 'Alpha', True)
+        self.engine().sync()
+        self.remove_from_drive()
+        self.drive.calls.clear()
+        with self.assertRaises(Blocked) as caught:
+            self.engine().sync()
+        self.assertEqual(caught.exception.path, 'Documents')
+        self.assertEqual(self.drive.calls, [])
+        self.assertEqual(self.drive.files['Alpha/a.txt']['content'], b'a')
+
+    def test_after_unticking_sync_runs_and_both_copies_stay(self):
+        self.synced('report.txt', folder_name='Omarchy')
+        moved = {path: self.drive.files.pop(path) for path in ('Documents', 'Documents/report.txt')}
+        self.drive.files.update({'Elsewhere/' + path: item for path, item in moved.items()})
+        with self.assertRaises(Blocked):
+            self.engine().sync()
+        select(self.paths, 'Documents', False)
+        self.assertEqual(self.engine().sync(), [])
+        self.assertEqual(self.writes(), [])
+        self.assertEqual((self.documents/'report.txt').read_bytes(), b'report.txt')
+        self.assertEqual(self.drive.files['Elsewhere/Documents/report.txt']['content'], b'report.txt')
+        self.assertFalse(self.paths.backups.exists())

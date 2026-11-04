@@ -198,6 +198,12 @@ class Engine:
         self.store.identity(self.settings['folder_id'])
         baseline = {p: item for p, item in self.store.baseline().items()
                     if included(p) and p.partition('/')[0] not in self.merging}
+        # Otherwise every file would plan as a Drive deletion, and a small folder would pass the deletion limit.
+        gone = {p.partition('/')[0] for p in baseline} - self.remote.keys()
+        if gone:
+            name = min(gone)
+            raise Blocked(f"~/{name} is no longer in Drive/{self.settings.get('folder_name', 'Drive')}. "
+                          'Restore it on Drive, or untick it to stop syncing.', path=name)
         return plan(self.local, self.remote, baseline, self.settings.get('max_deletes', 20), allow_many_deletes)
 
     def save_recorded_identities(self):

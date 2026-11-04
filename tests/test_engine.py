@@ -446,6 +446,7 @@ class EngineTests(unittest.TestCase):
         def tracked_file_became_folder():
             (self.local / 'clash').mkdir()
             self.store.remember('Sync/clash', {'id': 'x', 'hash': 'y'})
+            self.drive.files['Sync'] = {'id': 'sync', 'kind': 'dir', 'hash': None}  # A tracked file means Drive had its folder.
         table = ((symlink, 'Sync/link'), (google_doc, 'Sync/doc'), (local_file_drive_folder, 'Sync/clash'),
                  (local_folder_drive_file, 'Sync/clash'), (tracked_file_became_folder, 'Sync/clash'))
         for arrange, path in table:
