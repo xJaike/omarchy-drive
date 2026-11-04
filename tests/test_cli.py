@@ -14,10 +14,10 @@ import unittest
 import urllib.error
 import urllib.parse
 import urllib.request
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from omarchy_drive.auth import authorize
-from omarchy_drive.storage import AuthRequired, Blocked, Paths, atomic_json, read_json
+from omarchy_drive.storage import AuthRequired, Blocked, Paths, Store, atomic_json, read_json
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -164,10 +164,52 @@ class ContinueSetupTests(unittest.TestCase):
             with patch('omarchy_drive.cli.authorize') as authorize_mock, patch('omarchy_drive.cli.Drive') as drive_class, contextlib.redirect_stdout(io.StringIO()):
                 drive_class.return_value.root.return_value = 'folder'
                 drive_class.return_value.get.return_value = {'name': 'Omarchy', 'mimeType': 'application/vnd.google-apps.folder'}
-                result = main(['setup', '--continue', '--local', directory + '/GoogleDrive'])
+                result = main(['setup', '--continue'])
             self.assertEqual(result, 0)
             authorize_mock.assert_not_called()
             self.assertEqual(read_json(paths.settings)['folder_id'], 'folder')
+
+    def test_setup_parser_has_no_local_option(self):
+        from omarchy_drive.cli import parser
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            parser().parse_args(['setup', '--local', '/x'])
+
+    def test_fresh_setup_ticks_nothing(self):
+        from omarchy_drive.cli import main
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+                'HOME': directory, 'XDG_CONFIG_HOME': directory + '/config', 'XDG_STATE_HOME': directory + '/state'}):
+            paths = Paths()
+            paths.prepare()
+            atomic_json(paths.client, {'installed': {'client_id': 'client', 'client_secret': 'secret'}})
+            atomic_json(paths.tokens, {'refresh_token': 'saved'})
+            with patch('omarchy_drive.cli.Drive') as drive_class, contextlib.redirect_stdout(io.StringIO()):
+                drive_class.return_value.root.return_value = 'folder'
+                drive_class.return_value.get.return_value = {'name': 'Omarchy', 'mimeType': 'application/vnd.google-apps.folder'}
+                self.assertEqual(main(['setup', '--continue']), 0)
+            settings = read_json(paths.settings)
+            self.assertEqual({k: settings[k] for k in ('folder_id', 'folder_name', 'max_deletes')},
+                             {'folder_id': 'folder', 'folder_name': 'Omarchy', 'max_deletes': 20})
+            self.assertNotIn('local_dir', settings)
+            self.assertFalse(settings.get('home_folders'))
+            self.assertEqual(sorted(p.name for p in Path(directory).iterdir()), ['config', 'state'])
+
+    def test_doctor_works_without_local_dir(self):
+        from omarchy_drive.cli import doctor
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+                'HOME': directory, 'XDG_CONFIG_HOME': directory + '/config', 'XDG_STATE_HOME': directory + '/state'}):
+            (Path(directory) / 'Work').mkdir()
+            (Path(directory) / 'Work/a.txt').write_text('a')
+            paths = Paths()
+            paths.prepare()
+            info = (Path(directory) / 'Work').stat()
+            atomic_json(paths.settings, {'folder_id': 'root', 'home_folders': {'Work': {'identity': [info.st_dev, info.st_ino]}}})
+            output = io.StringIO()
+            with patch('omarchy_drive.cli.context') as make, contextlib.redirect_stdout(output):
+                store = Store(paths.state)
+                drive = MagicMock(scan=MagicMock(return_value={}))
+                make.return_value = (paths.configured(), store, drive)
+                self.assertEqual(doctor(paths), 0)
+            self.assertIn('Local scan: OK (2 items)', output.getvalue())
 
     def test_continue_without_tokens_returns_instructions(self):
         from omarchy_drive.cli import main

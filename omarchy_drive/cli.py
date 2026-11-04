@@ -1,7 +1,6 @@
 import argparse
 import datetime
 import json
-import os
 from pathlib import Path
 import select
 import sqlite3
@@ -16,6 +15,7 @@ from .activity import Activity, detail_lines, recent_events
 from .auth import Tokens, authorize
 from .drive import Drive, FOLDER
 from .engine import Engine
+from .migrate import migrate
 from .http import HTTP, APIError
 from .storage import Paths, Store, DriveError, AuthRequired, Blocked, Offline, atomic_json, read_json
 
@@ -37,9 +37,7 @@ to the folder ID chosen during setup. Tokens stay in your private local config.
 Google may expire refresh tokens for External apps left in Testing after seven
 days. Set the app's publishing status appropriately for continued personal use.
 
-The default pair is ~/GoogleDrive and Drive/Omarchy. Existing files are merged;
-conflicting content is kept under a conflict-copy name. Setup itself transfers
-no files. Preview the first sync before enabling the background timer.
+Setup transfers no files and selects no folders. Tick the home folders you want in the panel, then preview the first sync.
 '''
 
 
@@ -67,7 +65,7 @@ def setup(args, paths):
         return 0
     if paths.settings.exists():
         existing = read_json(paths.settings)
-        if existing.get('folder_id') and (args.folder_id or args.folder != 'Omarchy' or args.local != str(Path.home() / 'GoogleDrive')):
+        if existing.get('folder_id') and (args.folder_id or args.folder != 'Omarchy'):
             raise Blocked('Already configured. Use setup --client PATH without folder overrides to reconnect.')
     else:
         existing = {}
@@ -84,13 +82,7 @@ def setup(args, paths):
             item = drive.get(folder_id)
             if item.get('trashed') or item.get('mimeType') != FOLDER:
                 raise Blocked('The configured Drive ID must be a folder outside Trash.')
-            local = Path(existing.get('local_dir', args.local)).expanduser().absolute()
-            if local.is_symlink() or os.path.ismount(local):
-                raise Blocked('Choose an ordinary local directory, not a mount or symbolic link.')
-            local.mkdir(parents=True, exist_ok=True)
-            from .engine import scan_local
-            scan_local(local)
-            settings = dict(existing, local_dir=str(local), folder_id=folder_id, folder_name=item['name'], max_deletes=20)
+            settings = dict(existing, folder_id=folder_id, folder_name=item['name'], max_deletes=20)
             atomic_json(paths.settings, settings)
             paths.record('ready', 'Connected. Preview the first sync: omarchy-drive preview')
         finally:
@@ -176,7 +168,7 @@ def status(paths):
         'blocked': 'Sync needs attention', 'interrupted': 'Sync interrupted', 'setup': 'Setup needed',
     }.get(data['kind'], data['message'])
     lines = ['Omarchy Drive · ' + heading,
-             settings.get('local_dir', '~/GoogleDrive') + ' ↔ Drive/' + settings.get('folder_name', 'Omarchy'),
+             f'{len(settings.get("home_folders", {}))} folders ↔ Drive/{settings.get("folder_name", "Omarchy")}',
              'Automatic sync: ' + ('enabled' if data.get('scheduled') else 'paused'),
              'Last successful sync: ' + stamp]
     if data['kind'] not in ('running', 'success'):
@@ -199,11 +191,14 @@ def doctor(paths):
         try:
             from .engine import scan_local
             from .home_folders import mappings
-            local = scan_local(settings['local_dir'])
-            for name, source in mappings(settings).items():
-                local[name] = {'kind': 'dir'}
-                local.update({name + '/' + path: item for path, item in scan_local(source).items()})
-            remote = drive.scan(settings['folder_id'])
+            from .selection import includes
+            included = lambda path: includes(path, settings)
+            local = {}
+            for name, source in mappings(settings, paths).items():
+                if included(name):
+                    local[name] = {'kind': 'dir'}
+                    local.update(scan_local(source, name + '/', included))
+            remote = drive.scan(settings['folder_id'], included)
             print(f'Local scan: OK ({len(local)} items)')
             print(f'Drive access: OK ({len(remote)} items)')
             print(f'Sync baseline: {len(store.baseline())} files; first-run merging is safe without a baseline')
@@ -267,7 +262,6 @@ def parser():
     connect.add_argument('--folder', default='Omarchy')
     connect.add_argument('--folder-id')
     connect.add_argument('--create-folder', action='store_true')
-    connect.add_argument('--local', default=str(Path.home() / 'GoogleDrive'))
     return app
 
 
@@ -277,6 +271,7 @@ def main(argv=None):
     paths.prepare()
     command = args.command or 'watch'
     try:
+        migrate(paths)
         if command == 'setup':
             return setup(args, paths)
         if command in ('sync', 'preview'):
@@ -302,8 +297,7 @@ def main(argv=None):
             print('Scheduled sync enabled; it checks every minute.')
             return code
         if command == 'open':
-            folder = read_json(paths.settings).get('local_dir', str(Path.home() / 'GoogleDrive'))
-            return subprocess.call(['xdg-open', folder])
+            return subprocess.call(['xdg-open', str(Path.home())])
         return watch(paths)
     except KeyboardInterrupt as error:
         activity = getattr(args, '_activity', None)

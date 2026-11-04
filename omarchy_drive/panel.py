@@ -14,6 +14,7 @@ from .cli import status as backend_status
 from .drive import API, Drive, FOLDER, component, query_url
 from .http import HTTP
 from .engine import local_path
+from .migrate import migrate
 from . import home_folders
 from .selection import folder_name
 from .storage import Paths, Store, DriveError, Blocked, atomic_json, read_json
@@ -269,6 +270,7 @@ def main(argv=None):
     paths = Paths()
     paths.prepare()
     try:
+        migrate(paths)
         if args.command == 'status':
             result = status(paths)
         elif args.command == 'folders':
