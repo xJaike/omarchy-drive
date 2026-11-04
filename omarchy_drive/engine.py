@@ -1,7 +1,6 @@
 """Content-based two-way reconciliation, independent of any third-party sync tool."""
 from dataclasses import dataclass
 import hashlib
-import json
 import os
 from pathlib import Path, PurePosixPath
 import shutil
@@ -12,7 +11,7 @@ import uuid
 from .drive import digest
 from .activity import Activity
 from .selection import includes
-from .home_folders import mappings
+from .home_folders import mappings, record_identity
 from .storage import Blocked, atomic_json
 
 IGNORED = {'RCLONE_TEST'}  # Legacy access marker; it is never needed by this engine.
@@ -48,7 +47,7 @@ def local_path(root, relative):
     return path
 
 
-def scan_local(root):
+def scan_local(root, prefix='', included=None):
     root = Path(root)
     if root.is_symlink() or not root.is_dir() or os.path.ismount(root):
         raise Blocked('The local sync folder must exist as an ordinary local directory. Restore it before syncing.')
@@ -58,17 +57,18 @@ def scan_local(root):
     for directory, folders, files in os.walk(root, followlinks=False, onerror=scan_error):
         for name in list(folders) + files:
             path = Path(directory) / name
-            relative = path.relative_to(root).as_posix()
-            if name.startswith(TEMP_PREFIX) or relative in IGNORED:
+            relative = prefix + path.relative_to(root).as_posix()
+            # Removing a folder here also keeps os.walk from opening it, so nothing below it can block.
+            if name.startswith(TEMP_PREFIX) or relative in IGNORED or (included and not included(relative)):
                 if name in folders:
                     folders.remove(name)
                 continue
             info = path.lstat()
             if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
-                raise Blocked(f'Unsupported local file type: {relative}. Move it outside the sync folder.')
+                raise Blocked(f'Unsupported local file type: {relative}. Move it outside the sync folder.', path=relative)
             if stat.S_ISDIR(info.st_mode):
                 if os.path.ismount(path):
-                    raise Blocked(f'A nested mount is not supported: {relative}')
+                    raise Blocked(f'A nested mount is not supported: {relative}', path=relative)
                 result[relative] = {'kind': 'dir'}
             else:
                 checksum = digest(path)
@@ -144,41 +144,56 @@ def plan(local, remote, baseline, max_deletes=20, allow_many_deletes=False):
 class Engine:
     def __init__(self, paths, settings, store, drive, activity=None):
         self.paths, self.settings, self.store, self.drive = paths, settings, store, drive
-        self.root = Path(settings['local_dir'])
-        self.archive_root = self.root.parent / ('.' + self.root.name + '-omarchy-drive-backups')
+        self.archive_root = paths.backups
         self.run_id = time.strftime('%Y%m%dT%H%M%S') + '-' + uuid.uuid4().hex[:8]
-        self.remote, self.local = {}, {}
+        self.remote, self.local, self.merging = {}, {}, set()
         self.activity = activity or Activity(paths)
         self.drive.progress = self.activity.transfer
 
+    def home_source(self, path):
+        first = path.partition('/')[0]
+        source = mappings(self.settings, self.paths).get(first)
+        if source is None:
+            raise Blocked(f'{first} is not a ticked home folder.')
+        return source
+
     def local_target(self, path):
-        first, _, rest = path.partition('/')
-        source = mappings(self.settings).get(first)
-        if source is not None:
-            return local_path(source, rest) if rest else source
-        return local_path(self.root, path)
+        source = self.home_source(path)
+        rest = path.partition('/')[2]
+        return local_path(source, rest) if rest else source
 
     def local_stop(self, path):
-        first = path.partition('/')[0]
-        source = mappings(self.settings).get(first)
-        return source.parent if source is not None else self.root.parent
+        return self.home_source(path).parent
 
     def snapshot(self, allow_many_deletes=False):
-        sources = mappings(self.settings)
-        self.local = scan_local(self.root)
+        included = lambda path: includes(path, self.settings)
+        sources = mappings(self.settings, self.paths)
+        # With no recorded identity nothing proves the sync history describes this folder, so both sides merge.
+        self.merging = {name for name, entry in self.settings.get('home_folders', {}).items()
+                        if (entry or {}).get('identity') is None}
+        self.local = {}
         for name, source in sources.items():
-            self.local[name] = {'kind': 'dir'}
-            self.local.update({name + '/' + path: item for path, item in scan_local(source).items()})
+            if not source.exists():
+                continue  # Drive-only, so plan emits mkdir-local.
+            if name in self.merging:
+                record_identity(self.settings, name, source)
+            if included(name):
+                self.local[name] = {'kind': 'dir'}
+                self.local.update(scan_local(source, name + '/', included))
         # Build complete listings before any local or cloud mutation.
-        # Only recurse into selected remote directories. Local scanning remains
-        # complete so unsupported file types cannot masquerade as deletions.
-        self.remote = self.drive.scan(self.settings['folder_id'],
-            selected=self.settings.get('selected_folders'), root_files=self.settings.get('root_files', True))
-        self.local = {p: item for p, item in self.local.items() if includes(p, item, self.settings)}
-        info = self.root.stat()
-        self.store.identity(json.dumps([str(self.root.resolve()), info.st_dev, info.st_ino, self.settings['folder_id']]))
-        baseline = {p: item for p, item in self.store.baseline().items() if includes(p, item, self.settings)}
+        self.remote = self.drive.scan(self.settings['folder_id'], included)
+        self.store.identity(self.settings['folder_id'])
+        baseline = {p: item for p, item in self.store.baseline().items()
+                    if included(p) and p.partition('/')[0] not in self.merging}
         return plan(self.local, self.remote, baseline, self.settings.get('max_deletes', 20), allow_many_deletes)
+
+    def save_recorded_identities(self):
+        """Clear the baseline before saving, so a crash leads to a merge, never a deletion."""
+        for name in self.merging:
+            self.store.forget_subtree(name)
+        homes = self.settings.get('home_folders', {})
+        if any((homes.get(name) or {}).get('identity') is not None for name in self.merging):
+            atomic_json(self.paths.settings, self.settings)
 
     def checked_local(self, path, expected):
         target = self.local_target(path)
@@ -227,7 +242,7 @@ class Engine:
         backup = self.backup(path, target, expected['hash'])
         self.checked_local(path, expected)
         original = backup.with_name(backup.name + '.original')
-        # Both locations are siblings of the sync root on the same filesystem.
+        # home_folders.validate requires the backup directory's filesystem.
         # Retain the actual inode too, including writes racing this rename.
         os.rename(target, original)
         sync_directories(original.parent, self.archive_root.parent)
@@ -302,6 +317,8 @@ class Engine:
         original = PurePosixPath(path)
         name = original.stem + '.conflict-local-' + left['hash'][:12] + original.suffix
         conflict = str(original.with_name(name))
+        if not includes(conflict, self.settings):
+            raise Blocked(f'The conflict-copy name is excluded: {conflict}. Include it or rename the file before syncing.')
         target = self.local_target(conflict)
         remote_copy = self.remote.get(conflict)
         if target.exists() and (not target.is_file() or digest(target) != left['hash']):
@@ -334,6 +351,7 @@ class Engine:
         if not self.activity.started:
             self.activity.start()
         actions = self.snapshot(allow_many_deletes)
+        self.save_recorded_identities()
         changed = [a for a in actions if a.kind not in ('remember', 'forget')]
         self.activity.planned(changed)
         completed = 0
@@ -350,6 +368,9 @@ class Engine:
             if action.kind == 'mkdir-local':
                 target = self.local_target(path)
                 target.mkdir(parents=True, exist_ok=True)
+                if '/' not in path:
+                    record_identity(self.settings, path, target)
+                    atomic_json(self.paths.settings, self.settings)
                 self.local[path] = {'kind': 'dir'}
             elif action.kind == 'mkdir-remote':
                 item = self.drive.mkdir(self.parent_id(path), PurePosixPath(path).name, 'folder:' + path)

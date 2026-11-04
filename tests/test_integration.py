@@ -2,11 +2,13 @@
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import socket
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import urllib.parse
 import urllib.request
 
@@ -26,10 +28,20 @@ class DriveServer(ThreadingHTTPServer):
         self.sessions = {}
         self.counter = 0
         self.drop_upload_response = False
+        self.requests = []
 
-    def put(self, name, content, file_id=None, parent='root'):
+    def folder(self, name, parent='root'):
+        self.counter += 1
+        file_id = f'folder-{self.counter}'
+        self.items[file_id] = dict(id=file_id, name=name, parents=[parent], mimeType=FOLDER,
+                                  version=str(self.counter), trashed=False)
+        return file_id
+
+    def put(self, name, content, file_id=None, parent=None):
         self.counter += 1
         file_id = file_id or f'id-{self.counter}'
+        if parent is None:  # An edit stays in its folder.
+            parent = self.items[file_id]['parents'][0] if file_id in self.items else 'root'
         self.items[file_id] = dict(id=file_id, name=name, parents=[parent], mimeType='application/octet-stream',
                                   version=str(self.counter), size=str(len(content)),
                                   md5Checksum=hashlib.md5(content).hexdigest(), trashed=False)
@@ -62,6 +74,7 @@ class DriveHandler(BaseHTTPRequestHandler):
 
     def parse(self):
         parsed = urllib.parse.urlsplit(self.path)
+        self.server.requests.append(self.command + ' ' + urllib.parse.unquote(self.path))
         return parsed.path, urllib.parse.parse_qs(parsed.query)
 
     def body(self):
@@ -171,12 +184,16 @@ class WholeAppIntegrationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         base = Path(self.temp.name)
-        self.local = base / 'GoogleDrive'
-        self.local.mkdir()
+        self.home = base / 'home'
+        self.local = self.home / 'Sync'
+        self.local.mkdir(parents=True)
+        # Patch before Paths(): it derives settings and backups from these, and the engine writes both.
+        environment = patch.dict(os.environ, {
+            'HOME': str(self.home), 'XDG_CONFIG_HOME': str(base / 'config'),
+            'XDG_STATE_HOME': str(base / 'state'), 'XDG_DATA_HOME': str(base / 'data')})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.paths = Paths()
-        self.paths.state = base / 'state'
-        self.paths.config = base / 'config'
-        self.paths.status = self.paths.state / 'status.json'
         self.paths.prepare()
         self.store = Store(self.paths.state)
         self.addCleanup(self.store.close)
@@ -187,13 +204,17 @@ class WholeAppIntegrationTests(unittest.TestCase):
         self.addCleanup(self.server.shutdown)
         self.drive = Drive(HTTP(opener=LoopbackOpener(self.server), sleep=lambda _: None), self.store, self.paths.state)
 
-    def engine(self):
-        return Engine(self.paths, {'local_dir': str(self.local), 'folder_id': 'root'}, self.store, self.drive)
+    def engine(self, folder=None, excluded=()):
+        folder = folder or self.local
+        info = folder.stat()
+        return Engine(self.paths, {'folder_id': 'root', 'excluded': list(excluded),
+                                   'home_folders': {folder.name: {'identity': [info.st_dev, info.st_ino]}}},
+                      self.store, self.drive)
 
     def test_complete_two_way_flow_through_google_protocol(self):
         (self.local / 'local.txt').write_bytes(b'local')
         (self.local / 'empty.txt').touch()
-        cloud_id = self.server.put('cloud.txt', b'cloud')
+        cloud_id = self.server.put('cloud.txt', b'cloud', parent=self.server.folder('Sync'))
         self.engine().sync()
         self.assertEqual((self.local / 'cloud.txt').read_bytes(), b'cloud')
         self.assertEqual(self.engine().sync(), [])
@@ -218,7 +239,7 @@ class WholeAppIntegrationTests(unittest.TestCase):
         self.drive.condition = racing
 
     def test_drive_edit_racing_an_overwrite_is_not_clobbered(self):
-        cloud_id = self.server.put('cloud.txt', b'cloud')
+        cloud_id = self.server.put('cloud.txt', b'cloud', parent=self.server.folder('Sync'))
         self.engine().sync()
         (self.local / 'cloud.txt').write_bytes(b'edited locally')
         self.race_after_precondition(cloud_id, b'edited in Drive')
@@ -227,7 +248,7 @@ class WholeAppIntegrationTests(unittest.TestCase):
         self.assertEqual(self.server.content[cloud_id], b'edited in Drive')
 
     def test_drive_edit_racing_a_trash_is_not_trashed(self):
-        cloud_id = self.server.put('cloud.txt', b'cloud')
+        cloud_id = self.server.put('cloud.txt', b'cloud', parent=self.server.folder('Sync'))
         self.engine().sync()
         (self.local / 'cloud.txt').unlink()
         self.race_after_precondition(cloud_id, b'edited in Drive')
@@ -245,23 +266,54 @@ class WholeAppIntegrationTests(unittest.TestCase):
         self.assertEqual(self.engine().sync(), [])
 
     def test_home_folder_mapping_through_google_protocol(self):
-        from unittest.mock import patch
-        home = self.local.parent
-        documents = home / 'Documents'
+        documents = self.home / 'Documents'
         documents.mkdir()
         (documents / 'local.txt').write_bytes(b'local home file')
-        info = documents.stat()
-        settings = dict(local_dir=str(self.local), folder_id='root', selected_folders=['Documents'],
-                        home_folders={'Documents': {'identity': [info.st_dev, info.st_ino]}})
-        with patch('pathlib.Path.home', return_value=home):
-            def engine():
-                return Engine(self.paths, settings, self.store, self.drive)
-            engine().sync()
-            folder = next(item for item in self.server.items.values() if item['name'] == 'Documents')
-            uploaded = next(item for item in self.server.items.values() if item['name'] == 'local.txt')
-            self.assertEqual(self.server.content[uploaded['id']], b'local home file')
-            self.server.put('cloud.txt', b'cloud home file', parent=folder['id'])
-            engine().sync()
-            self.assertEqual((documents / 'cloud.txt').read_bytes(), b'cloud home file')
-            self.assertFalse((self.local / 'Documents').exists())
-            self.assertEqual(engine().sync(), [])
+        self.engine(documents).sync()
+        folder = next(item for item in self.server.items.values() if item['name'] == 'Documents')
+        uploaded = next(item for item in self.server.items.values() if item['name'] == 'local.txt')
+        self.assertEqual(uploaded['parents'], [folder['id']])
+        self.assertEqual(self.server.content[uploaded['id']], b'local home file')
+        self.server.put('cloud.txt', b'cloud home file', parent=folder['id'])
+        self.engine(documents).sync()
+        self.assertEqual((documents / 'cloud.txt').read_bytes(), b'cloud home file')
+        self.assertEqual(self.engine(documents).sync(), [])
+
+    def test_unticked_drive_folder_is_never_listed(self):
+        ticked = self.server.folder('Sync')
+        other = self.server.folder('Other')
+        other_file = self.server.put('private.txt', b'private', parent=other)
+        loose = self.server.put('loose.txt', b'loose')
+        self.server.put('kept.txt', b'kept', parent=ticked)
+        self.engine().sync()
+        self.assertEqual((self.local / 'kept.txt').read_bytes(), b'kept')
+        for file_id in (other, other_file, loose):
+            self.assertFalse([request for request in self.server.requests if file_id in request])
+        self.assertEqual(sorted(path.name for path in self.home.iterdir()), ['Sync'])
+
+    def test_excluded_paths_are_not_listed_read_or_written(self):
+        excluded = ('Sync/Private', 'Sync/secret.txt')
+        ticked = self.server.folder('Sync')
+        private = self.server.folder('Private', parent=ticked)
+        inner = self.server.put('inner.txt', b'cloud inner', parent=private)
+        secret = self.server.put('secret.txt', b'cloud secret', parent=ticked)
+        self.server.put('kept.txt', b'kept', parent=ticked)
+        (self.local / 'Private').mkdir()
+        (self.local / 'Private' / 'local-inner.txt').write_bytes(b'local inner')
+        (self.local / 'secret.txt').write_bytes(b'local secret')
+        (self.local / 'new.txt').write_bytes(b'new')
+
+        self.engine(excluded=excluded).sync()
+
+        self.assertEqual((self.local / 'kept.txt').read_bytes(), b'kept')
+        new = next(item for item in self.server.items.values() if item['name'] == 'new.txt')
+        self.assertEqual(self.server.content[new['id']], b'new')
+        for file_id in (private, inner, secret):
+            self.assertFalse([request for request in self.server.requests if file_id in request], file_id)
+        self.assertEqual(self.server.content[secret], b'cloud secret')
+        self.assertEqual(self.server.content[inner], b'cloud inner')
+        self.assertEqual([item['name'] for item in self.server.items.values() if item['name'] == 'local-inner.txt'], [])
+        self.assertEqual(len([item for item in self.server.items.values() if item['name'] == 'secret.txt']), 1)
+        self.assertEqual((self.local / 'secret.txt').read_bytes(), b'local secret')
+        self.assertFalse((self.local / 'Private' / 'inner.txt').exists())
+        self.assertEqual(self.engine(excluded=excluded).sync(), [])

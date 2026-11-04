@@ -224,17 +224,11 @@ def timer(paths, args):
 
 def reveal(paths, relative):
     """Reveal a containing directory only; never launch a downloaded file."""
-    settings = paths.configured()
-    root = Path(settings['local_dir'])
-    if not root.is_dir() or root.is_symlink():
-        raise Blocked('The configured local sync folder is unavailable.')
     first, _, rest = relative.partition('/')
-    source = home_folders.mappings(settings).get(first)
-    if source is not None:
-        root = source
-        path = local_path(source, rest) if rest else source
-    else:
-        path = local_path(root, relative)
+    root = home_folders.mappings(paths.configured(), paths).get(first)
+    if root is None:
+        raise Blocked('This path is not inside a ticked home folder.')
+    path = local_path(root, rest) if rest else root
     directory = path if path == root else path.parent
     while directory != root and not directory.is_dir():
         directory = directory.parent
