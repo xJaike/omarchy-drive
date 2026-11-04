@@ -809,6 +809,21 @@ class MainTests(PanelCase):
         run.assert_called_once()
         self.assertEqual(stat.S_IMODE(self.paths.backups.stat().st_mode), 0o700)
 
+    def test_open_backups_works_while_migration_is_blocked(self):
+        self.make('GoogleDrive/keep.txt')
+        atomic_json(self.paths.settings, {'folder_id': 'root', 'local_dir': str(self.home / 'GoogleDrive')})
+        before = self.paths.settings.read_bytes()
+        with patch('omarchy_drive.panel.subprocess.run') as run:
+            code, value, _ = self.run_main('open-backups')
+        self.assertEqual((code, value), (0, {'ok': True}))
+        self.assertEqual(run.call_args.args[0], ['xdg-open', str(self.paths.backups)])
+        self.assertEqual(self.paths.settings.read_bytes(), before)
+        # Only this command skips migrating.
+        code, value, _ = self.run_main('status')
+        self.assertEqual(code, 1)
+        self.assertIn('keep.txt', value['lastError'])
+        self.assertEqual(self.paths.settings.read_bytes(), before)
+
     def test_open_backups_refuses_a_symlink(self):
         target = self.home / 'elsewhere'
         target.mkdir()

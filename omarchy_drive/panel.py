@@ -326,7 +326,9 @@ def main(argv=None):
     paths = Paths()
     paths.prepare()
     try:
-        migrate(paths)
+        # Backups stay reachable while a stopped migration waits for the user. Opening them reads no settings.
+        if args.command != 'open-backups':
+            migrate(paths)
         if args.command == 'status':
             result = status(paths)
         elif args.command == 'folders':
