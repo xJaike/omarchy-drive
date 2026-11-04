@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.xjaike.omarchy-drive",
+  "name": "omarchy-drive",
+  "version": "1.0.0",
+  "author": "xJaike",
+  "description": "Google Drive two-way sync status and controls",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "omarchy-drive",
+    "description": "Local GoogleDrive sync status",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  },
+  "license": "MIT"
+}

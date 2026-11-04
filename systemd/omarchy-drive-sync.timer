@@ -1,0 +1,9 @@
+[Unit]
+Description=Sync Omarchy Google Drive folder every five minutes
+
+[Timer]
+OnStartupSec=2min
+OnUnitInactiveSec=5min
+
+[Install]
+WantedBy=timers.target

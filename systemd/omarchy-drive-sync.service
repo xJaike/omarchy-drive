@@ -1,0 +1,8 @@
+[Unit]
+Description=Sync Google Drive Omarchy folder with local offline copies
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/omarchy-drive-sync
+TimeoutStartSec=infinity
+TimeoutStopSec=2min
