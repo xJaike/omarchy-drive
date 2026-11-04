@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from omarchy_drive import home_folders
 from omarchy_drive.panel import reveal
 from omarchy_drive.storage import Paths, Blocked, atomic_json
 
@@ -22,30 +23,40 @@ class RevealTests(unittest.TestCase):
         self.addCleanup(self.env.stop)
         self.paths = Paths()
         self.paths.prepare()
-        self.root = Path(self.tmp.name) / 'GoogleDrive'
+        self.root = Path(self.tmp.name) / 'Documents'
         self.root.mkdir()
-        atomic_json(self.paths.settings, {'local_dir':str(self.root), 'folder_id':'root'})
+        settings = {'folder_id':'root'}
+        home_folders.record_identity(settings, 'Documents', self.root)
+        atomic_json(self.paths.settings, settings)
 
     def test_reveals_parent_without_executing_file(self):
-        parent = self.root / 'Documents'
+        parent = self.root / 'Reports'
         parent.mkdir()
         file = parent / 'click-me.desktop'
         file.write_text('[Desktop Entry]\nExec=anything\n')
         with patch('omarchy_drive.panel.subprocess.run') as run:
             run.return_value.returncode = 0
-            self.assertTrue(reveal(self.paths, 'Documents/click-me.desktop')['ok'])
+            self.assertTrue(reveal(self.paths, 'Documents/Reports/click-me.desktop')['ok'])
         self.assertEqual(run.call_args.args[0], ['xdg-open',str(parent)])
         self.assertIn('timeout',run.call_args.kwargs)
 
     def test_missing_file_falls_back_to_nearest_existing_parent(self):
         with patch('omarchy_drive.panel.subprocess.run') as run:
             run.return_value.returncode = 0
-            reveal(self.paths, 'Removed/subfolder/file.pdf')
+            reveal(self.paths, 'Documents/Removed/subfolder/file.pdf')
         self.assertEqual(run.call_args.args[0], ['xdg-open',str(self.root)])
+
+    def test_unticked_first_component_is_blocked(self):
+        (Path(self.tmp.name) / 'Pictures').mkdir()
+        for path in ('Pictures', 'Pictures/a.jpg', 'Removed/subfolder/file.pdf'):
+            with self.subTest(path=path), patch('omarchy_drive.panel.subprocess.run') as run:
+                with self.assertRaises(Blocked):
+                    reveal(self.paths, path)
+                run.assert_not_called()
 
     def test_traversal_and_symlinks_never_open_outside_sync_root(self):
         (self.root/'link').symlink_to(Path(self.tmp.name))
-        for path in ('../outside', '/etc/passwd', 'link/outside', 'Documents/../../outside'):
+        for path in ('../outside', '/etc/passwd', 'Documents/link/outside', 'Documents/../../outside'):
             with self.subTest(path=path), patch('omarchy_drive.panel.subprocess.run') as run:
                 with self.assertRaises(Blocked):
                     reveal(self.paths,path)
@@ -55,7 +66,7 @@ class RevealTests(unittest.TestCase):
         with patch('omarchy_drive.panel.subprocess.run') as run:
             run.return_value.returncode = 1
             with self.assertRaisesRegex(Blocked,'file manager'):
-                reveal(self.paths,'file.txt')
+                reveal(self.paths,'Documents/file.txt')
 
 
 @unittest.skipUnless(shutil.which('node'), 'node is not installed')
