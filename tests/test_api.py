@@ -258,6 +258,28 @@ class APITests(unittest.TestCase):
             drive.trash(self.item)
         self.assertEqual(str(caught.exception), CHANGED_ON_DRIVE)
 
+    def slash_listing(self, inner_name, top_name=None):
+        folder = dict(self.item, id='keep-id', name='keep', mimeType=FOLDER, md5Checksum=None)
+        top = [folder] + ([dict(self.item, id='top', name=top_name)] if top_name else [])
+        return [json_response({'mimeType': FOLDER}), json_response({'files': top}),
+                json_response({'files': [dict(self.item, id='inner', name=inner_name)]})]
+
+    def test_slash_name_inside_a_folder_blocks_even_under_an_exclusion(self):
+        drive = self.adapter(self.slash_listing('gone/x'))
+        with self.assertRaises(Blocked):
+            drive.scan('root', lambda p: p != 'keep/gone' and not p.startswith('keep/gone/'))
+
+    def test_slash_name_inside_a_folder_blocks_without_exclusions(self):
+        drive = self.adapter(self.slash_listing('other/x'))
+        with self.assertRaises(Blocked):
+            drive.scan('root')
+
+    def test_top_level_slash_name_is_skipped_when_a_selection_is_supplied(self):
+        drive = self.adapter(self.slash_listing('a.txt', top_name='keep/x'))
+        result = drive.scan('root', lambda p: p == 'keep' or p == 'keep/a.txt')
+        self.assertNotIn('keep/x', result)
+        self.assertEqual(set(result), {'keep', 'keep/a.txt'})
+
     def test_completed_upload_with_bad_hash_keeps_pending_record(self):
         source = self.root / 'source'
         source.write_bytes(b'abcdef')
