@@ -275,6 +275,44 @@ class APITests(unittest.TestCase):
         with self.assertRaises(Blocked):
             drive.scan('root')
 
+    def test_slash_name_inside_a_folder_names_its_location_and_asks_for_a_rename(self):
+        selected = lambda p: includes(p, {'home_folders': {'keep': {}}})
+        for included in (None, selected):
+            drive = self.adapter(self.slash_listing('other/x'))
+            with self.subTest(selection=included is not None), self.assertRaises(Blocked) as caught:
+                drive.scan('root', included)
+            self.assertEqual(str(caught.exception), 'A Drive item in keep has a "/" in its name: other/x. Rename it on Drive before syncing.')
+            self.assertIsNone(caught.exception.path)  # It cannot form an exclusion path, so only a rename fixes it.
+
+    def test_slash_name_message_strips_control_characters(self):
+        folder = dict(self.item, id='keep-id', name='ke\x1b[2Jep', mimeType=FOLDER, md5Checksum=None)
+        drive = self.adapter([json_response({'mimeType': FOLDER}), json_response({'files': [folder]}),
+                              json_response({'files': [dict(self.item, id='inner', name='a/\x1b[31mb')]})])
+        with self.assertRaises(Blocked) as caught:
+            drive.scan('root')
+        self.assertEqual(str(caught.exception), 'A Drive item in ke [2Jep has a "/" in its name: a/ [31mb. Rename it on Drive before syncing.')
+
+    def temporary_listing(self, name):
+        folder = dict(self.item, id='keep-id', name='keep', mimeType=FOLDER, md5Checksum=None)
+        return [json_response({'mimeType': FOLDER}), json_response({'files': [folder]}),
+                json_response({'files': [dict(self.item, id='t', name=name)]})]
+
+    def test_temporary_prefix_message_names_the_path(self):
+        drive = self.adapter(self.temporary_listing('.omarchy-drive-tmp-x'))
+        with self.assertRaises(Blocked) as caught:
+            drive.scan('root')
+        self.assertEqual(str(caught.exception), 'A Drive file uses the app temporary-file prefix: keep/.omarchy-drive-tmp-x. Rename it before syncing.')
+        self.assertEqual(caught.exception.path, 'keep/.omarchy-drive-tmp-x')
+
+    def test_temporary_prefix_message_strips_control_characters_but_the_path_stays_exact(self):
+        name = '.omarchy-drive-tmp-\x1b[31mx'
+        drive = self.adapter(self.temporary_listing(name))
+        with self.assertRaises(Blocked) as caught:
+            drive.scan('root')
+        self.assertIn('keep/.omarchy-drive-tmp- [31mx', str(caught.exception))
+        self.assertNotIn('\x1b', str(caught.exception))
+        self.assertEqual(caught.exception.path, 'keep/' + name)  # Exclude this needs the real name.
+
     def test_top_level_slash_name_is_skipped_when_a_selection_is_supplied(self):
         drive = self.adapter(self.slash_listing('a.txt', top_name='keep/x'))
         result = drive.scan('root', lambda p: includes(p, {'home_folders': {'keep': {}}}))

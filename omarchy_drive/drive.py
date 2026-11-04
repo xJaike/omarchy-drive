@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import urllib.parse
+from .activity import safe
 from .http import APIError
 from .storage import Blocked, DriveError, Offline
 
@@ -96,16 +97,16 @@ class Drive:
                 if '/' in item['name']:
                     # Loose top-level slash names never sync, but inside a folder one would fake a deeper
                     # path, so it must block instead of being pruned.
-                    if not prefix and included is not None:
-                        continue
                     if prefix:
-                        component(item['name'])
+                        raise Blocked(safe(f'A Drive item in {prefix} has a "/" in its name: {item["name"]}. Rename it on Drive before syncing.'))
+                    if included is not None:
+                        continue
                 # Pruned paths are never validated, so problems inside them cannot block a sync.
                 if included is not None and not included(path):
                     continue
                 name = component(item['name'])
                 if name.startswith('.omarchy-drive-tmp-'):
-                    raise Blocked('A Drive file uses the app temporary-file prefix. Rename it before syncing.', path=path)
+                    raise Blocked(safe(f'A Drive file uses the app temporary-file prefix: {path}. Rename it before syncing.'), path=path)
                 if path in result:
                     raise Blocked(f'Duplicate Drive names at {path}. Rename the duplicates before syncing.', path=path)
                 folder = item['mimeType'] == FOLDER
