@@ -228,3 +228,26 @@ License: [MIT](LICENSE).
 
 The panel follows Omarchy’s active theme automatically, including popup colors,
 status accents, muted text, and the shell font. Theme changes apply live.
+
+### Sync folders from your home directory
+
+Open the Drive panel and click **Choose home folders**. Click a folder such as
+`~/Documents` to enable two-way sync with `Drive/Omarchy/Documents`. Its files
+stay in their original location; no symlinks or extra local copies are created.
+The existing `~/GoogleDrive` folder continues syncing alongside these folders.
+The next automatic sync transfers the selected content, or click **Sync now**.
+
+Click a selected folder again to stop syncing it. Both local and cloud files
+remain. Selecting it again starts a merge and preserves conflicting versions.
+Existing cloud folders with the same name are merged using the usual conflict
+protection. A same-name folder already inside `~/GoogleDrive` must be resolved
+before linking its home-folder counterpart.
+
+Only visible folders directly inside your home directory are offered. Hidden
+folders, the home directory itself, symlinks, and folders on another filesystem
+are excluded. A selected folder that disappears or is replaced blocks syncing
+instead of being treated as deleted content. Unsupported symlinks or special
+files inside a selected folder also block syncing; check **Preview** in the CLI
+after selecting large project trees. Normal two-way deletion rules apply while
+a folder is selected: cloud deletions preserve local backup copies, and local
+deletions move the cloud copy to Trash.

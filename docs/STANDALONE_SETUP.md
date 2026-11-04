@@ -850,3 +850,20 @@ Tests do not contact a live Google account. Actual sign-in and end-to-end Google
 Drive compatibility must also be checked with your own client and account.
 
 License: [MIT](../LICENSE).
+
+## Select folders already in your home directory
+
+1. Open the Google Drive panel from the bar.
+2. Click **Choose home folders**.
+3. Click a folder to select it. For example, `~/Pictures` maps to
+   `Drive/Omarchy/Pictures` without moving your local files.
+4. Run `omarchy-drive preview` to review the plan, then click **Sync now**, or
+   let the existing automatic schedule run.
+5. Click a selected folder again to stop syncing it. Both copies remain.
+
+Your existing `~/GoogleDrive` selection continues working. Existing cloud
+content with the same folder name is merged, retaining conflicts. A folder
+with that name already in `~/GoogleDrive` prevents linking until you resolve
+that overlap. Hidden folders, symlinks, nested mounts, and other filesystems
+are unsupported. If a selected source folder disappears or is replaced, sync
+stops for review rather than interpreting that as a deletion.

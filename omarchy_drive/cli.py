@@ -198,7 +198,11 @@ def doctor(paths):
         settings, store, drive = context(paths)
         try:
             from .engine import scan_local
+            from .home_folders import mappings
             local = scan_local(settings['local_dir'])
+            for name, source in mappings(settings).items():
+                local[name] = {'kind': 'dir'}
+                local.update({name + '/' + path: item for path, item in scan_local(source).items()})
             remote = drive.scan(settings['folder_id'])
             print(f'Local scan: OK ({len(local)} items)')
             print(f'Drive access: OK ({len(remote)} items)')

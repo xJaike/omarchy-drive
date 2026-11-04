@@ -36,6 +36,7 @@ Item {
   property string lastError: ""
   property string actionStatus: ""
   property var folders: []
+  property var homeFolders: []
   property double staleBytes: 0
   property int staleCount: 0
   property int rootFileCount: 0
@@ -87,6 +88,7 @@ Item {
     remainingChanges = Number(value.pending || 0)
     var recent = Array.isArray(value.recent) ? value.recent : []
     if (JSON.stringify(recent) !== JSON.stringify(recentFiles)) recentFiles = recent
+    homeFolders = Array.isArray(value.homeFolders) ? value.homeFolders : []
     folderPath = value.folderPath || ""
     cloudFolderName = value.cloudFolderName || "Omarchy"
     cloudUrl = value.cloudUrl || "https://drive.google.com/drive/my-drive"
@@ -143,6 +145,9 @@ Item {
     _desiredTimer = enabled ? 1 : 0
     var interval = Math.max(1, Number(settings.syncIntervalMin || syncIntervalMin))
     runControl(baseArgs("timer").concat([enabled ? "--enable" : "--disable", "--interval", String(interval)]))
+  }
+  function selectHomeFolder(name, enabled) {
+    runControl(baseArgs("home-select").concat(["--name", name, enabled ? "--enable" : "--disable"]))
   }
   function configure() { Quickshell.execDetached(["omarchy-launch-terminal", "python3", configurePath]) }
   function revealFile(path) {

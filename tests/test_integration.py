@@ -193,3 +193,25 @@ class WholeAppIntegrationTests(unittest.TestCase):
         self.assertEqual(len(matches), 1)
         self.assertEqual(self.server.content[matches[0]['id']], b'some bytes')
         self.assertEqual(self.engine().sync(), [])
+
+    def test_home_folder_mapping_through_google_protocol(self):
+        from unittest.mock import patch
+        home = self.local.parent
+        documents = home / 'Documents'
+        documents.mkdir()
+        (documents / 'local.txt').write_bytes(b'local home file')
+        info = documents.stat()
+        settings = dict(local_dir=str(self.local), folder_id='root', selected_folders=['Documents'],
+                        home_folders={'Documents': {'identity': [info.st_dev, info.st_ino]}})
+        with patch('pathlib.Path.home', return_value=home):
+            def engine():
+                return Engine(self.paths, settings, self.store, self.drive)
+            engine().sync()
+            folder = next(item for item in self.server.items.values() if item['name'] == 'Documents')
+            uploaded = next(item for item in self.server.items.values() if item['name'] == 'local.txt')
+            self.assertEqual(self.server.content[uploaded['id']], b'local home file')
+            self.server.put('cloud.txt', b'cloud home file', parent=folder['id'])
+            engine().sync()
+            self.assertEqual((documents / 'cloud.txt').read_bytes(), b'cloud home file')
+            self.assertFalse((self.local / 'Documents').exists())
+            self.assertEqual(engine().sync(), [])

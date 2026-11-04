@@ -17,6 +17,7 @@ Panel {
   property string focusSection: "folders"
   property int folderIndex: 0
   property bool cursorActive: false
+  property bool homePickerOpen: false
 
   readonly property var barIdentity: hostWidget || root
   readonly property var folderRows: drive.folders
@@ -356,6 +357,60 @@ Panel {
             onRevealRequested: function(path) { drive.revealFile(path) }
             onRetryRequested: drive.syncNow()
             onInteraction: root.cursorActive = false
+          }
+
+          Column {
+            visible: drive.authenticated
+            width: parent.width
+            spacing: 8
+            Button {
+              text: root.homePickerOpen ? "Close home folder picker" : "Choose home folders"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              focusable: true
+              bordered: true
+              radius: 3
+              fontSize: 12
+              onClicked: root.homePickerOpen = !root.homePickerOpen
+            }
+            Text {
+              visible: root.homePickerOpen
+              width: parent.width
+              text: "Sync selected folders in place. ~/Documents ↔ Drive/" + drive.cloudFolderName + "/Documents. Deselecting keeps both copies."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: 10
+              wrapMode: Text.Wrap
+            }
+            Column {
+              visible: root.homePickerOpen
+              width: parent.width
+              spacing: 3
+              Repeater {
+                model: drive.homeFolders
+                Button {
+                  required property var modelData
+                  width: parent.width
+                  text: (modelData.selected ? "✓  " : "+  ") + "~/" + modelData.name
+                  foreground: modelData.error ? root.urgent : root.foreground
+                  fontFamily: root.fontFamily
+                  fontSize: 12
+                  radius: 3
+                  leftAlign: true
+                  focusable: true
+                  enabled: !drive.busy && !drive.syncing
+                  tooltipText: modelData.error || (modelData.selected ? "Stop syncing; keep local and cloud files" : "Link this folder in place for two-way sync")
+                  onClicked: drive.selectHomeFolder(modelData.name, !modelData.selected)
+                }
+              }
+              Text {
+                visible: drive.homeFolders.length === 0
+                text: "No eligible folders found in your home directory."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: 10
+              }
+            }
           }
 
           PanelSeparator {

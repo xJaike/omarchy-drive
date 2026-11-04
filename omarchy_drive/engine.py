@@ -12,6 +12,7 @@ import uuid
 from .drive import digest
 from .activity import Activity
 from .selection import includes
+from .home_folders import mappings
 from .storage import Blocked, atomic_json
 
 IGNORED = {'RCLONE_TEST'}  # Legacy access marker; it is never needed by this engine.
@@ -150,8 +151,24 @@ class Engine:
         self.activity = activity or Activity(paths)
         self.drive.progress = self.activity.transfer
 
+    def local_target(self, path):
+        first, _, rest = path.partition('/')
+        source = mappings(self.settings).get(first)
+        if source is not None:
+            return local_path(source, rest) if rest else source
+        return local_path(self.root, path)
+
+    def local_stop(self, path):
+        first = path.partition('/')[0]
+        source = mappings(self.settings).get(first)
+        return source.parent if source is not None else self.root.parent
+
     def snapshot(self, allow_many_deletes=False):
+        sources = mappings(self.settings)
         self.local = scan_local(self.root)
+        for name, source in sources.items():
+            self.local[name] = {'kind': 'dir'}
+            self.local.update({name + '/' + path: item for path, item in scan_local(source).items()})
         # Build complete listings before any local or cloud mutation.
         # Only recurse into selected remote directories. Local scanning remains
         # complete so unsupported file types cannot masquerade as deletions.
@@ -164,7 +181,7 @@ class Engine:
         return plan(self.local, self.remote, baseline, self.settings.get('max_deletes', 20), allow_many_deletes)
 
     def checked_local(self, path, expected):
-        target = local_path(self.root, path)
+        target = self.local_target(path)
         if expected is None:
             if target.exists():
                 raise Blocked(f'A local file appeared during sync: {path}. Retry sync.')
@@ -214,7 +231,7 @@ class Engine:
         # Retain the actual inode too, including writes racing this rename.
         os.rename(target, original)
         sync_directories(original.parent, self.archive_root.parent)
-        sync_directories(target.parent, self.root.parent)
+        sync_directories(target.parent, self.local_stop(path))
         if digest(original) != expected['hash']:
             try:
                 os.link(original, target)
@@ -252,7 +269,7 @@ class Engine:
                 os.link(temporary, target)
             except FileExistsError as error:
                 raise Blocked(f'A local file appeared during download: {path}. Both versions were retained.') from error
-            sync_directories(target.parent, self.root.parent)
+            sync_directories(target.parent, self.local_stop(path))
             self.remember(path, item)
             self.local[path] = dict(kind='file', hash=item['hash'], size=item['size'])
             partial.unlink(missing_ok=True)
@@ -285,7 +302,7 @@ class Engine:
         original = PurePosixPath(path)
         name = original.stem + '.conflict-local-' + left['hash'][:12] + original.suffix
         conflict = str(original.with_name(name))
-        target = local_path(self.root, conflict)
+        target = self.local_target(conflict)
         remote_copy = self.remote.get(conflict)
         if target.exists() and (not target.is_file() or digest(target) != left['hash']):
             raise Blocked(f'The conflict-copy name is already occupied: {conflict}')
@@ -301,7 +318,7 @@ class Engine:
                     os.fsync(output.fileno())
                 # Link publishes a complete copy and refuses to overwrite a new file.
                 os.link(temporary, target)
-                sync_directories(target.parent, self.root.parent)
+                sync_directories(target.parent, self.local_stop(path))
             finally:
                 Path(temporary).unlink(missing_ok=True)
                 staged.unlink(missing_ok=True)
@@ -331,7 +348,7 @@ class Engine:
             if action.kind not in ('remember', 'forget'):
                 self.activity.begin(action)
             if action.kind == 'mkdir-local':
-                target = local_path(self.root, path)
+                target = self.local_target(path)
                 target.mkdir(parents=True, exist_ok=True)
                 self.local[path] = {'kind': 'dir'}
             elif action.kind == 'mkdir-remote':

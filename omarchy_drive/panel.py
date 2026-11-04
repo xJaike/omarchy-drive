@@ -14,6 +14,7 @@ from .cli import status as backend_status
 from .drive import API, Drive, FOLDER, component, query_url
 from .http import HTTP
 from .engine import local_path
+from . import home_folders
 from .selection import folder_name
 from .storage import Paths, Store, DriveError, Blocked, atomic_json, read_json
 
@@ -69,7 +70,13 @@ def folders(paths, refresh=True):
         if len(names) != len(set(names)):
             raise Blocked('Duplicate names in the Drive folder. Rename duplicates before syncing.')
         local = Path(settings['local_dir'])
+        linked = home_folders.mappings(settings)
         sizes, counts, approximate = disk_inventory(local)
+        for name, source in linked.items():
+            linked_sizes, linked_counts, partial = disk_inventory(source, budget=0.15)
+            sizes[name] = sum(linked_sizes.values())
+            counts[name] = sum(linked_counts.values())
+            approximate |= partial
         selected = settings.get('selected_folders')
         rows = []
         cloud_names = set()
@@ -80,13 +87,16 @@ def folders(paths, refresh=True):
             cloud_names.add(name)
             active = selected is None or name in selected
             rows.append(dict(id=item['id'], name=name, selected=active, localBytes=sizes.get(name, 0),
-                             onDisk=(local / name).is_dir(), stale=not active and (local / name).exists(),
+                             onDisk=(local / name).is_dir() or name in linked, stale=not active and (local / name).exists(),
                              missing=False, approx=approximate))
         for path in local.iterdir() if local.is_dir() else []:
             if path.is_dir() and not path.is_symlink() and path.name not in cloud_names:
                 active = selected is None or path.name in selected
                 rows.append(dict(name=path.name, selected=active, localBytes=sizes.get(path.name, 0),
                                  onDisk=True, stale=not active, missing=True, approx=approximate))
+        for name in linked.keys() - cloud_names:
+            rows.append(dict(name=name, selected=True, localBytes=sizes.get(name, 0), onDisk=True,
+                             stale=False, missing=True, approx=approximate))
         root_items = [item for item in items if not item['mimeType'].startswith('application/vnd.google-apps.') and item['name'] != 'RCLONE_TEST']
         stale = [item for item in rows if item['stale']]
         value = dict(ok=True, updated=time.time(), folders=sorted(rows, key=lambda r: r['name'].casefold()),
@@ -149,11 +159,13 @@ def status(paths):
         warning='Sync scope: Drive/' + settings.get('folder_name', 'Omarchy') + '. Unselected files stay on disk.',
         lastError=view['message'] if kind in ('blocked','offline','error','auth','interrupted') else '',
         detailsTooltip=view['tooltip'].replace('Left: dashboard · Middle: sync now · Right: open folder', 'Left: panel · Right: refresh').replace('Automatic sync: enabled' if not timer else 'Automatic sync: paused', 'Automatic sync: paused' if not timer else 'Automatic sync: enabled'), activityText='\n'.join(detail_lines(view)),
-        current=current, recent=view.get('recent', []), queue=view.get('queue', []), pending=view.get('pending', 0),
+        homeFolders=home_folders.choices(settings) if authenticated else [], current=current, recent=view.get('recent', []), queue=view.get('queue', []), pending=view.get('pending', 0),
         syncIntervalMin=settings.get('sync_interval_min', 1))
 
 
 def select(paths, args):
+    if args.remove and args.remove in paths.configured().get('home_folders', {}):
+        return home_folders.select(paths, args.remove, False)
     with paths.lock():
         settings = paths.configured()
         cache = read_json(paths.state / 'panel-cache.json')
@@ -216,8 +228,14 @@ def reveal(paths, relative):
     root = Path(settings['local_dir'])
     if not root.is_dir() or root.is_symlink():
         raise Blocked('The configured local sync folder is unavailable.')
-    path = local_path(root, relative)
-    directory = path.parent
+    first, _, rest = relative.partition('/')
+    source = home_folders.mappings(settings).get(first)
+    if source is not None:
+        root = source
+        path = local_path(source, rest) if rest else source
+    else:
+        path = local_path(root, relative)
+    directory = path if path == root else path.parent
     while directory != root and not directory.is_dir():
         directory = directory.parent
     if not directory.is_dir():
@@ -233,6 +251,11 @@ def main(argv=None):
     commands = parser.add_subparsers(dest='command', required=True)
     for name in ('status', 'folders', 'sync', 'open-backups'):
         commands.add_parser(name)
+    home = commands.add_parser('home-select')
+    home.add_argument('--name', required=True)
+    enabled = home.add_mutually_exclusive_group(required=True)
+    enabled.add_argument('--enable', action='store_true')
+    enabled.add_argument('--disable', action='store_true')
     show = commands.add_parser('reveal')
     show.add_argument('--path', required=True)
     selection = commands.add_parser('select')
@@ -265,6 +288,8 @@ def main(argv=None):
             directory.mkdir(exist_ok=True, mode=0o700)
             subprocess.run(['xdg-open', str(directory)], check=False)
             result = {'ok': True}
+        elif args.command == 'home-select':
+            result = home_folders.select(paths, args.name, args.enable)
         elif args.command == 'reveal':
             result = reveal(paths, args.path)
         elif args.command == 'select':
