@@ -158,6 +158,36 @@ class FolderTests(PanelCase):
         self.assertTrue(rows['Work']['approx'])
         self.assertTrue(value['localBytesApprox'])
 
+    def test_a_read_overlapping_a_selection_change_is_not_served_afterwards(self):
+        (self.home / 'Work').mkdir()
+        start = self.paths.settings.stat().st_mtime + 10
+        clock = {'now': start}
+        real = panel.folder_list
+
+        def tick_during_the_read(*args):
+            # select deletes the cache; the read in progress then writes it again with old ticks.
+            with self.drive({'root': [folder('Work')]}):
+                home_folders.select(self.paths, 'Work', True)
+            os.utime(self.paths.settings, (start + 1, start + 1))
+            clock['now'] = start + 2
+            return real(*args)
+
+        with patch('omarchy_drive.panel.time.time', lambda: clock['now']):
+            with patch('omarchy_drive.panel.folder_list', side_effect=tick_during_the_read):
+                _, rows = self.rows({'root': [folder('Work')]})
+            self.assertFalse(rows['Work']['selected'], 'the overlapping read holds the old tick')
+            self.assertEqual(read_json(self.cache)['updated'], start, 'the cache is dated from the start of its read')
+            clock['now'] = start + 3
+            _, rows = self.rows({'root': [folder('Work')]})
+        self.assertTrue(rows['Work']['selected'])
+
+    def test_a_read_started_after_the_last_change_is_served_from_cache(self):
+        self.make('Work/a')
+        with self.drive({'root': [folder('Work')]}):
+            first = panel.folders(self.paths)
+        with patch('omarchy_drive.panel.HTTP', side_effect=AssertionError('must not read Drive')):
+            self.assertEqual(panel.folders(self.paths), first)
+
     def test_a_fresh_cache_is_returned_without_network(self):
         (self.home / 'Work').mkdir()
         first, _ = self.rows()

@@ -471,7 +471,8 @@ path; there are no patterns.
 **Untick or exclude** to stop syncing. No file changes on either side and nothing
 is written to Drive. Ticking or including it again merges: identical files are
 remembered, one-sided files are copied, and differing files keep both versions.
-Selection changes wait until an active sync finishes.
+Selection changes wait until an active sync finishes. Expanded folders stay open
+and update after each change, so you can exclude several items in a row.
 
 Keyboard: Up and Down move through the rows, Right expands, Left collapses, Space
 toggles the tick, and `o` opens the top-level folder under the cursor when it
@@ -866,25 +867,35 @@ syncing; the app never moves or deletes it. Old backups stay in
 
 ### Undo the migration
 
-Do this only with the previous version of the app. This version migrates again as
-soon as it reads the restored settings, and its bar panel reads them every few
-seconds, so put the previous version back first. Folders you ticked and exclusions
-you added since the migration are forgotten.
+This version migrates again as soon as it reads the restored settings, and its bar
+panel reads them every few seconds, so follow these steps in order. Folders you
+ticked and exclusions you added since the migration are forgotten.
 
-1. Make sure no sync is running:
+1. Make sure no sync is running. Keep it that way until the last step, and do not
+   press **Sync now**:
 
    ```bash
    systemctl --user disable --now omarchy-drive-sync.timer
    systemctl --user stop omarchy-drive-sync.service
    ```
 
-2. Copy the saved settings back:
+2. Check that `~/GoogleDrive` is still the original folder. It must be: the previous
+   version checks the folder's identity, so a recreated `~/GoogleDrive` fails that
+   check even if it holds the same files. If you deleted it, the undo cannot be
+   completed this way, so stop here, stay on this version, and run
+   `omarchy-drive resume`.
+3. Put the previous version of the app back.
+4. Move every folder you took out of `~/GoogleDrive` for the migration back into it.
+   Otherwise the previous version sees those folders as deleted locally and plans to
+   move their Drive copies to Trash.
+5. Copy the saved settings back:
 
    ```bash
    cp ~/.config/omarchy-drive/settings.json.pre-migration ~/.config/omarchy-drive/settings.json
    ```
 
-3. Set the database's identity value to the exact contents of
+6. Set the `identity` value in the `metadata` table of
+   `~/.local/state/omarchy-drive-v2/sync.sqlite3` to the exact contents of
    `identity.pre-migration`. Skip this step if that file does not exist, because then
    the migration did not change the value.
 
@@ -901,10 +912,24 @@ you added since the migration are forgotten.
    EOF
    ```
 
-4. Delete both saved files:
+7. Preview the result, and look for `trash-remote` lines:
+
+   ```bash
+   omarchy-drive preview
+   ```
+
+   Do not continue if any `trash-remote` line appears that you did not intend. Put
+   the missing folder back and preview again.
+8. Delete both saved files:
 
    ```bash
    rm -f ~/.config/omarchy-drive/settings.json.pre-migration ~/.config/omarchy-drive/identity.pre-migration
+   ```
+
+9. Only after that, turn automatic sync back on:
+
+   ```bash
+   omarchy-drive resume
    ```
 
 If you use `XDG_CONFIG_HOME` or `XDG_STATE_HOME`, change these paths to match.

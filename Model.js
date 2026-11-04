@@ -122,6 +122,19 @@ function flattenRows(folders, childrenByPath, expanded) {
   return rows
 }
 
+// Expanded rows on screen, parents first. A path under a closed or vanished parent is left out.
+function openPaths(folders, childrenByPath, expanded) {
+  return flattenRows(folders, childrenByPath, expanded)
+    .map(function (row) { return row.path })
+    .filter(function (path) { return expanded[path] === true })
+}
+
+function withExclusion(rows, path, excluded) {
+  return rows.map(function (row) {
+    return row.path === path ? Object.assign({}, row, {excluded: excluded}) : row
+  })
+}
+
 function isChild(row) {
   return Number(row.depth || 0) > 0
 }
@@ -200,6 +213,8 @@ if (typeof module !== "undefined") {
     usageText: usageText,
     folderSummary: folderSummary,
     flattenRows: flattenRows,
+    openPaths: openPaths,
+    withExclusion: withExclusion,
     canExpand: canExpand,
     includesOnToggle: includesOnToggle,
     rowEnabled: rowEnabled,

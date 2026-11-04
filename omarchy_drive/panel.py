@@ -101,11 +101,18 @@ def folder_list(settings, paths, drive_names, available, old):
                 usedBytes=old.get('usedBytes', 0), quotaBytes=old.get('quotaBytes', 0), quotaKnown=old.get('quotaKnown', False))
 
 
+def cache_is_current(cache, paths):
+    """A read that started before the last settings change holds old ticks, however late it finished."""
+    updated = cache.get('updated', 0)
+    return time.time() - updated < 15 and updated >= paths.settings.stat().st_mtime
+
+
 def folders(paths, refresh=True):
+    started = time.time()
     settings = paths.configured()
     cache_file = paths.state / 'panel-cache.json'
     old = read_json(cache_file)
-    if not refresh or time.time() - old.get('updated', 0) < 15:
+    if not refresh or cache_is_current(old, paths):
         return old
     store = Store(paths.state)
     try:
@@ -125,6 +132,7 @@ def folders(paths, refresh=True):
             value.update(usedBytes=int(quota.get('usage', 0)), quotaBytes=int(quota.get('limit', 0)), quotaKnown='limit' in quota)
         except DriveError:
             pass  # folder_list already carried the last known values.
+        value['updated'] = started
         atomic_json(cache_file, value)
         return value
     finally:

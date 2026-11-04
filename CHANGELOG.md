@@ -24,17 +24,38 @@ something is ticked.
   nothing, and names what to move into your home folder. `~/GoogleDrive` itself is
   left in place.
 
-To undo the migration, put the previous version of the app back first, because this
-version migrates again as soon as it reads the restored settings. Then:
+To undo the migration, follow these steps in order, because this version migrates
+again as soon as it reads the restored settings, and its bar panel reads them every
+few seconds. Folders you ticked and exclusions you added since the migration are
+forgotten.
 
-1. Make sure no sync is running:
-   `systemctl --user disable --now omarchy-drive-sync.timer` and
-   `systemctl --user stop omarchy-drive-sync.service`.
-2. In `~/.config/omarchy-drive/`, copy `settings.json.pre-migration` over
-   `settings.json`.
-3. Set the `identity` value in the `metadata` table of
+1. Make sure no sync is running. Keep it that way until the last step, and do not
+   press **Sync now**:
+
+   ```bash
+   systemctl --user disable --now omarchy-drive-sync.timer
+   systemctl --user stop omarchy-drive-sync.service
+   ```
+
+2. Check that `~/GoogleDrive` is still the original folder. It must be: the previous
+   version checks the folder's identity, so a recreated `~/GoogleDrive` fails that
+   check even if it holds the same files. If you deleted it, the undo cannot be
+   completed this way, so stop here, stay on this version, and run
+   `omarchy-drive resume`.
+3. Put the previous version of the app back.
+4. Move every folder you took out of `~/GoogleDrive` for the migration back into it.
+   Otherwise the previous version sees those folders as deleted locally and plans to
+   move their Drive copies to Trash.
+5. Copy the saved settings back:
+
+   ```bash
+   cp ~/.config/omarchy-drive/settings.json.pre-migration ~/.config/omarchy-drive/settings.json
+   ```
+
+6. Set the `identity` value in the `metadata` table of
    `~/.local/state/omarchy-drive-v2/sync.sqlite3` to the exact contents of
-   `identity.pre-migration`. Skip this if that file does not exist.
+   `identity.pre-migration`. Skip this step if that file does not exist, because then
+   the migration did not change the value.
 
    ```bash
    python3 - <<'EOF'
@@ -49,7 +70,27 @@ version migrates again as soon as it reads the restored settings. Then:
    EOF
    ```
 
-4. Delete `settings.json.pre-migration` and `identity.pre-migration`.
+7. Preview the result, and look for `trash-remote` lines:
+
+   ```bash
+   omarchy-drive preview
+   ```
+
+   Do not continue if any `trash-remote` line appears that you did not intend. Put
+   the missing folder back and preview again.
+8. Delete both saved files:
+
+   ```bash
+   rm -f ~/.config/omarchy-drive/settings.json.pre-migration ~/.config/omarchy-drive/identity.pre-migration
+   ```
+
+9. Only after that, turn automatic sync back on:
+
+   ```bash
+   omarchy-drive resume
+   ```
+
+If you use `XDG_CONFIG_HOME` or `XDG_STATE_HOME`, change these paths to match.
 
 ## 2.1.0 — 2026-11-04
 

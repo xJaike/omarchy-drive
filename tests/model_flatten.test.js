@@ -37,6 +37,17 @@ assert.equal(flat({})[0].name, 'Docs');
 assert.equal(folders[0].depth, undefined);
 assert.equal(folders[0].path, undefined);
 
+// openPaths: expanded rows on screen, parents first; a path under a closed or vanished parent is not.
+assert.deepEqual(model.openPaths(folders, children, {Work: true, 'Work/Sub': true}), ['Work', 'Work/Sub']);
+assert.deepEqual(model.openPaths(folders, children, {'Work/Sub': true}), []);
+assert.deepEqual(model.openPaths(folders, children, {Work: true, 'Work/Gone': true}), ['Work']);
+assert.deepEqual(model.openPaths(folders, {}, {Gone: true, Docs: true}), ['Docs']);
+
+// withExclusion: changes the one row, in a copy, ahead of the re-fetch that confirms it.
+const listed = [{path: 'Work/a', excluded: false}, {path: 'Work/b', excluded: false}];
+assert.deepEqual(model.withExclusion(listed, 'Work/a', true), [{path: 'Work/a', excluded: true}, {path: 'Work/b', excluded: false}]);
+assert.equal(listed[0].excluded, false);
+
 // canExpand: top-level rows, unless they cannot be used.
 assert.equal(model.canExpand({depth: 0, name: 'Work', error: ''}), true);
 assert.equal(model.canExpand({depth: 0, name: 'Work', error: '~/Work is missing.'}), false);

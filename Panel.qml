@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import Quickshell
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
@@ -48,6 +47,7 @@ Panel {
 
   function open() {
     refresh()
+    drive.refetchTree()
     root.controller.show()
     Qt.callLater(function () {
       root.cursorActive = false
@@ -216,7 +216,10 @@ Panel {
         else if (key === "a") drive.setAutoSync(!drive.autoSyncActive)
         else if (key === "b") drive.toggleBrowse()
         else if (key === "o") root.openCursorFolder()
-        else if (key === "r") root.refresh()
+        else if (key === "r") {
+          root.refresh()
+          drive.refetchTree()
+        }
         else if (key === "c") drive.openBackups()
       }
 

@@ -48,6 +48,7 @@ Item {
   property int _desiredTimer: -1
   property bool _foldersLoaded: false
   property bool _foldersAgain: false
+  property var _selectionChange: null
   property var _treeQueue: []
   property string _treePath: ""
   property bool _treeDiscard: false
@@ -130,16 +131,31 @@ Item {
     var copy = Object.assign({}, pendingFolders)
     copy[folder.name] = next
     pendingFolders = copy
-    runControl(baseArgs("select").concat(["--name=" + folder.name, next ? "--enable" : "--disable"]))
+    runSelection(baseArgs("select").concat(["--name=" + folder.name, next ? "--enable" : "--disable"]), ({}))
   }
   function toggleExcluded(row) {
     if (!row || busy || syncing || !Model.rowEnabled(row)) return
-    runControl(baseArgs(Model.includesOnToggle(row) ? "include" : "exclude").concat(["--path=" + row.path]))
+    var including = Model.includesOnToggle(row)
+    runSelection(baseArgs(including ? "include" : "exclude").concat(["--path=" + row.path]), {path: row.path, excluded: !including})
   }
   function excludeBlocked() {
     if (blockedPath === "" || busy || syncing) return
-    if (blockedPath.indexOf("/") === -1) runControl(baseArgs("select").concat(["--name=" + blockedPath, "--disable"]))
-    else runControl(baseArgs("exclude").concat(["--path=" + blockedPath]))
+    if (blockedPath.indexOf("/") === -1) runSelection(baseArgs("select").concat(["--name=" + blockedPath, "--disable"]), ({}))
+    else runSelection(baseArgs("exclude").concat(["--path=" + blockedPath]), {path: blockedPath, excluded: true})
+  }
+  function runSelection(command, change) {
+    _selectionChange = change
+    runControl(command)
+  }
+  function applySelectionChange(change) {
+    if (change.path) showExclusion(change)
+    refetchTree()
+  }
+  // Shown at once, because the re-fetch that confirms it can take minutes offline.
+  function showExclusion(change) {
+    var parent = change.path.slice(0, change.path.lastIndexOf("/"))
+    if (Array.isArray(treeChildren[parent]))
+      treeChildren = withEntry(treeChildren, parent, Model.withExclusion(treeChildren[parent], change.path, change.excluded))
   }
   function withEntry(map, key, value) {
     var copy = Object.assign({}, map)
@@ -154,10 +170,11 @@ Item {
   function toggleExpanded(path) {
     if (expandedPaths[path] === true) { expandedPaths = withoutEntry(expandedPaths, path); return }
     expandedPaths = withEntry(expandedPaths, path, true)
-    if (!Array.isArray(treeChildren[path])) requestTree(path)
+    if (!Array.isArray(treeChildren[path]) || typeof treeErrors[path] === "string") requestTree(path)
   }
   function requestTree(path) {
     treeErrors = withoutEntry(treeErrors, path)
+    // Whatever is queued or running started after the last selection change, because refetchTree restarts it.
     if (treeLoading[path] === true) return
     treeLoading = withEntry(treeLoading, path, true)
     _treeQueue = _treeQueue.concat([path])
@@ -175,34 +192,44 @@ Item {
     var value = code === 0 ? Model.parseTree(out) : {ok: false, lastError: String(err || "").trim()}
     if (value.ok === false) { failTree(_treePath, value.lastError || "This folder could not be read."); return }
     driveAvailable = value.driveAvailable !== false
-    treeChildren = withEntry(treeChildren, _treePath, value.rows)
+    // An unchanged reply leaves the list alone, so its rows are not rebuilt.
+    if (JSON.stringify(treeChildren[_treePath]) !== JSON.stringify(value.rows)) treeChildren = withEntry(treeChildren, _treePath, value.rows)
     treeLoading = withoutEntry(treeLoading, _treePath)
   }
   function failTree(path, message) {
     treeErrors = withEntry(treeErrors, path, message)
     treeLoading = withoutEntry(treeLoading, path)
-    // Closed again, so that expanding it retries.
-    expandedPaths = withoutEntry(expandedPaths, path)
+    // A first load closes again, so that expanding it retries. A re-fetch keeps the rows it has.
+    if (!Array.isArray(treeChildren[path])) expandedPaths = withoutEntry(expandedPaths, path)
   }
   function treeTimedOut() {
     failTree(_treePath, offlineNote)
     _treeDiscard = true
     treeProcess.running = false
   }
-  function resetTree() {
-    _treeQueue = []
-    treeChildren = ({})
-    expandedPaths = ({})
-    treeLoading = ({})
+  // Rows stay listed until each reply replaces them, so the list and the cursor hold still.
+  function refetchTree() {
+    var open = Model.openPaths(folders, treeChildren, expandedPaths)
+    var stillOpen = ({}), kept = ({})
+    open.forEach(function (path) {
+      stillOpen[path] = true
+      if (Array.isArray(treeChildren[path])) kept[path] = treeChildren[path]
+    })
+    if (open.length !== Object.keys(expandedPaths).length) expandedPaths = stillOpen
+    if (Object.keys(kept).length !== Object.keys(treeChildren).length) treeChildren = kept
     treeErrors = ({})
+    treeLoading = stillOpen
+    _treeQueue = open
+    // A read under way may hold rows from before the change.
     if (treeProcess.running) {
       _treeDiscard = true
       treeTimeout.stop()
       treeProcess.running = false
     }
+    pumpTree()
   }
   function rowNote(path) {
-    if (treeLoading[path] === true) return "Loading…"
+    if (treeLoading[path] === true && !Array.isArray(treeChildren[path])) return "Loading…"
     if (typeof treeErrors[path] === "string") return treeErrors[path]
     var children = treeChildren[path]
     return expandedPaths[path] === true && Array.isArray(children) && children.length === 0 ? "Empty" : ""
@@ -263,15 +290,17 @@ Item {
     onExited: function(code) {
       folderTimeout.stop()
       root.foldersLoading = false
-      if (code === 0) root.applyFolders(foldersOut.text)
-      else { root._foldersLoaded = true; root.foldersError = String(foldersErr.text || "Could not list folders") }
-      root.pendingFolders = ({})
-      root.resetTree()
       root.refresh()
       if (root._foldersAgain) {
+        // This read started before a selection change, so its result and any failure are out of date.
         root._foldersAgain = false
         Qt.callLater(root.refreshFolders)
+        return
       }
+      if (code === 0) root.applyFolders(foldersOut.text)
+      else { root._foldersLoaded = true; root.foldersError = String(foldersErr.text || "Could not list folders") }
+      // A selection command still running reads the list again when it exits.
+      if (!root.busy) root.pendingFolders = ({})
     }
   }
   Process {
@@ -300,17 +329,19 @@ Item {
     stdout: StdioCollector { id: controlOut; waitForEnd: true }
     stderr: StdioCollector { id: controlErr; waitForEnd: true }
     onExited: function(code) {
+      var change = root._selectionChange
+      root._selectionChange = null
       root._desiredTimer = -1
       // On success the tick stays as shown until the folder list has caught up.
       if (code !== 0) root.pendingFolders = ({})
       root.controlError = code === 0 ? "" : String(controlErr.text || "The Drive command failed").trim()
       root.actionStatus = code === 0 ? "Updated" : ""
       clearNote.restart()
-      root.resetTree()
+      if (code === 0 && change) root.applySelectionChange(change)
       root.refresh()
+      if (!foldersProcess.running) root.refreshFolders()
       // A read already under way started before this change, so read again after it.
-      if (foldersProcess.running) root._foldersAgain = true
-      else root.refreshFolders()
+      else if (code === 0 && change) root._foldersAgain = true
     }
   }
   Timer { id: clearNote; interval: 2500; onTriggered: root.actionStatus = "" }
