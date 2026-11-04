@@ -21,5 +21,15 @@ done
 if cmp -s "$root/omarchy-drive.desktop" "$applications/omarchy-drive.desktop"; then
   rm -- "$applications/omarchy-drive.desktop"
 fi
+dropin="$units/omarchy-drive-sync.timer.d/interval.conf"
+if [[ -f "$dropin" ]] && python3 - "$dropin" <<'CHECK'
+import re, sys
+from pathlib import Path
+sys.exit(0 if re.fullmatch(r'\[Timer\]\nOnUnitInactiveSec=\nOnUnitInactiveSec=\d+min\n', Path(sys.argv[1]).read_text()) else 1)
+CHECK
+then
+  rm -- "$dropin"
+  rmdir "$units/omarchy-drive-sync.timer.d" 2>/dev/null || true
+fi
 systemctl --user daemon-reload
 echo 'Removed app helpers and schedule. Local files, cloud files, backups, database, and Google credentials were retained.'

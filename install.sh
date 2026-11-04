@@ -5,6 +5,7 @@ root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 for dependency in python3 systemctl; do
   command -v "$dependency" >/dev/null || { echo "Missing dependency: $dependency" >&2; exit 1; }
 done
+python3 -c 'import sys; sys.exit("Python 3.11 or newer is required") if sys.version_info < (3, 11) else None'
 bins="$HOME/.local/bin"
 units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 applications="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
@@ -29,6 +30,6 @@ install -m 644 "$root/omarchy-drive.desktop" "$applications/omarchy-drive.deskto
 systemctl --user daemon-reload
 systemctl --user reset-failed omarchy-drive-sync.service 2>/dev/null || true
 python3 "$root/bin/omarchy-drive" pause >/dev/null 2>&1 || true
-echo "Installed Omarchy Drive 2.0. Previous helpers are in $backup"
+echo "Installed Omarchy Google Drive 2.1. Previous helpers are in $backup"
 echo 'The old sync engine is stopped. No transfers were started.'
 echo 'Next: omarchy-drive setup'

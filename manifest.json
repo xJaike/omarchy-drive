@@ -1,10 +1,11 @@
 {
   "schemaVersion": 1,
-  "id": "io.github.xjaike.omarchy-drive",
-  "name": "omarchy-drive",
-  "version": "2.0.0",
-  "author": "xJaike",
-  "description": "Standalone Google Drive sync with offline files and conflict preservation",
+  "id": "io.github.xjaike.google-drive",
+  "name": "Google Drive",
+  "version": "2.1.0",
+  "author": "xJaike; interface by Homin Luo and Wesley Cole",
+  "license": "MIT",
+  "description": "Google Drive panel using a standalone Drive API backend with offline files, selective folders, and live transfer details.",
   "kinds": [
     "bar-widget"
   ],
@@ -12,11 +13,40 @@
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {
-    "displayName": "omarchy-drive",
-    "description": "Local GoogleDrive sync status",
-    "category": "Info",
+    "displayName": "Google Drive",
+    "description": "Offline Google Drive files with direct API sync and per-file progress.",
+    "category": "Files",
+    "aliases": [
+      "google-drive",
+      "gdrive",
+      "drive",
+      "drive-sync"
+    ],
     "allowMultiple": false,
-    "defaultSection": "right"
-  },
-  "license": "MIT"
+    "defaultSection": "right",
+    "defaults": {
+      "syncIntervalMin": 1,
+      "refreshIntervalSec": 5
+    },
+    "schema": [
+      {
+        "key": "syncIntervalMin",
+        "type": "integer",
+        "label": "Sync interval (minutes)",
+        "min": 1,
+        "max": 1440,
+        "step": 1,
+        "defaultValue": 1
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Status refresh (seconds)",
+        "min": 1,
+        "max": 3600,
+        "step": 1,
+        "defaultValue": 5
+      }
+    ]
+  }
 }

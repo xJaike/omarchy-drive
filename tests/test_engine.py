@@ -30,10 +30,13 @@ class MemoryDrive:
         self.files[path] = dict(item, content=data)
         return item
 
-    def scan(self, root):
+    def scan(self, root, selected=None, root_files=True):
         if not self.root_exists:
             raise Blocked('Remote root is missing')
-        return {path: {k: v for k, v in item.items() if k != 'content'} for path, item in self.files.items()}
+        from omarchy_drive.selection import includes
+        settings = {'selected_folders': selected, 'root_files': root_files}
+        return {path: {k: v for k, v in item.items() if k != 'content'} for path, item in self.files.items()
+                if includes(path, item, settings)}
 
     def mkdir(self, parent, name, key):
         self.serial += 1
@@ -104,6 +107,9 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.drive.files['local.txt']['content'], b'local')
         self.assertEqual(self.engine().sync(), [])
         self.assertEqual(len(self.store.baseline()), 2)
+        data = read_json(self.paths.status)
+        self.assertEqual(data['summary']['uploaded'], 0)
+        self.assertEqual(len(data['recent']), 2)
 
     def test_conflicting_initial_files_keep_both_versions(self):
         self.write('notes.txt', b'local notes')
@@ -113,6 +119,10 @@ class EngineTests(unittest.TestCase):
         self.assertEqual((self.local / 'notes.txt').read_bytes(), b'cloud notes')
         self.assertEqual((self.local / copy).read_bytes(), b'local notes')
         self.assertEqual(self.drive.files[copy]['content'], b'local notes')
+        data = read_json(self.paths.status)
+        self.assertEqual(data['summary']['uploaded'], 1)
+        self.assertEqual(data['summary']['downloaded'], 1)
+        self.assertEqual(data['summary']['conflicts'], 1)
         self.assertEqual(self.engine().sync(), [])
 
     def test_both_sides_edit_after_success_keep_both_versions(self):

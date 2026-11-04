@@ -12,6 +12,7 @@ import time
 import tty
 
 from . import __version__
+from .activity import Activity, detail_lines, recent_events
 from .auth import Tokens, authorize
 from .drive import Drive, FOLDER
 from .engine import Engine
@@ -56,9 +57,7 @@ def unit(action, *args):
 def context(paths):
     settings = paths.configured()
     store = Store(paths.state)
-    def progress(direction, name, done, total):
-        paths.record('running', direction + ': ' + name, current=dict(direction=direction, name=name, bytes=done, total=total))
-    drive = Drive(HTTP(Tokens(paths)), store, paths.state, progress)
+    drive = Drive(HTTP(Tokens(paths)), store, paths.state)
     return settings, store, drive
 
 
@@ -100,13 +99,27 @@ def setup(args, paths):
     return 0
 
 
+def error_details(error):
+    if isinstance(error, KeyboardInterrupt):
+        return 'interrupted', 'Sync interrupted. Completed files are saved; run sync to resume.'
+    if isinstance(error, DriveError):
+        return error.kind, str(error)
+    if isinstance(error, sqlite3.Error):
+        return 'blocked', 'Cannot read the sync database. Your files were retained; restore the database from backup.'
+    return 'blocked', 'A local file could not be read or stored. Check permissions and available disk space.'
+
+
 def run_sync(args, paths):
     with paths.lock():
-        settings, store, drive = context(paths)
+        activity = Activity(paths) if args.command == 'sync' else None
+        args._activity = activity
+        if activity:
+            activity.start()
+        store = None
         try:
-            engine = Engine(paths, settings, store, drive)
+            settings, store, drive = context(paths)
+            engine = Engine(paths, settings, store, drive, activity)
             if args.command == 'preview':
-                # Show large deletion plans without executing them.
                 actions = engine.snapshot(allow_many_deletes=True)
                 changed = [a for a in actions if a.kind not in ('remember', 'forget')]
                 for action in changed:
@@ -116,12 +129,25 @@ def run_sync(args, paths):
             changed = engine.sync(args.allow_many_deletes)
             print(f'Up to date. Applied {len(changed)} changes.')
             return 0
+        except (DriveError, sqlite3.Error, OSError, ValueError, KeyboardInterrupt) as error:
+            if activity:
+                activity.failure(*error_details(error))
+            raise
         finally:
-            store.close()
+            if store is not None:
+                store.close()
 
 
 def status(paths):
     data = read_json(paths.status)
+    if 'recent' not in data:
+        data['recent'] = recent_events(paths)
+    if data.get('current'):
+        current = dict(data['current'])
+        if 'percent' not in current:
+            total = current.get('total', 0)
+            current['percent'] = min(100, current.get('bytes', 0) / total * 100) if total else 0
+        data['current'] = current
     if not paths.settings.exists():
         data.update(kind='setup', message='Connect Google Drive: omarchy-drive setup')
     data.setdefault('kind', 'ready')
@@ -130,17 +156,37 @@ def status(paths):
         # A stale status after a crash must not appear as an active transfer.
         try:
             with paths.lock():
-                data.update(kind='interrupted', message='Previous sync was interrupted. Run sync to resume.')
+                data.update(kind='interrupted', message='Previous sync was interrupted. Run sync to resume.', current=None)
         except Blocked:
             pass
     labels = {'setup': 'Drive setup', 'auth': 'Drive sign-in', 'offline': 'Drive offline',
               'blocked': 'Drive blocked', 'error': 'Drive !', 'success': 'Drive ✓',
               'ready': 'Drive ready', 'running': 'Drive ↻', 'interrupted': 'Drive retry'}
     data['label'] = labels.get(data['kind'], 'Drive …')
+    if data['kind'] == 'running' and data.get('current'):
+        current = data['current']
+        prefix = {'upload': 'Drive ↑', 'download': 'Drive ↓', 'backup': 'Drive backup'}.get(current['direction'], 'Drive ↻')
+        data['label'] = prefix + (f' {current.get("percent", 0):.0f}%' if current['direction'] in ('upload', 'download', 'backup') else '')
     settings = read_json(paths.settings)
-    data['tooltip'] = '\n'.join([f'Omarchy Drive {__version__} · Direct Google Drive API',
-        data['message'], settings.get('local_dir', '~/GoogleDrive') + ' ↔ Drive/' + settings.get('folder_name', 'Omarchy'),
-        'Left: dashboard · Middle: sync now · Right: open folder'])
+    last = data.get('last_success')
+    stamp = datetime.datetime.fromtimestamp(last).strftime('%b %d %H:%M:%S') if last else 'not yet synced'
+    heading = {
+        'running': 'Checking files' if data.get('phase') == 'scanning' else 'Sync in progress',
+        'success': 'Everything is up to date', 'offline': 'Offline', 'auth': 'Sign-in required',
+        'blocked': 'Sync needs attention', 'interrupted': 'Sync interrupted', 'setup': 'Setup needed',
+    }.get(data['kind'], data['message'])
+    lines = ['Omarchy Drive · ' + heading,
+             settings.get('local_dir', '~/GoogleDrive') + ' ↔ Drive/' + settings.get('folder_name', 'Omarchy'),
+             'Automatic sync: ' + ('enabled' if data.get('scheduled') else 'paused'),
+             'Last successful sync: ' + stamp]
+    if data['kind'] not in ('running', 'success'):
+        lines += ['', data['message']]
+    lines += ['', *detail_lines(data), '', 'Left: dashboard · Middle: sync now · Right: open folder']
+    # Bound tooltip width so long paths cannot push the hover card off screen.
+    import textwrap
+    data['tooltip'] = '\n'.join(part for line in lines for part in
+                               (textwrap.wrap(safe(line), width=84, break_on_hyphens=False) or ['']))
+
     return data
 
 
@@ -178,20 +224,9 @@ def watch(paths):
             lines = [f'OMARCHY DRIVE {__version__}  ·  ' + data['kind'].upper(),
                      'Standalone Google Drive sync', '', data['message'], 'Last successful sync: ' + stamp,
                      'Automatic sync: ' + ('every minute' if data.get('scheduled') else 'paused')]
-            current = data.get('current')
-            if current and data['kind'] == 'running':
-                total, done = current['total'], current['bytes']
-                fraction = min(1, done / total) if total else 0
-                lines += ['[' + '█' * int(fraction * 30) + '░' * (30 - int(fraction * 30)) + f'] {fraction:.0%}',
-                          current['name'], f'{done:,} / {total:,} bytes']
+            lines += ['', *detail_lines(data, queue_limit=10, recent_limit=10)]
             lines += ['', '[S] Sync  [V] Preview  [D] Diagnose  [C] Connect',
-                      '[P] Pause schedule  [R] Resume  [O] Open folder  [Q] Quit', '', 'RECENT ACTIVITY']
-            db = paths.state / 'sync.sqlite3'
-            if db.exists():
-                # URI read-only connection avoids creating or mutating a database from the UI.
-                with sqlite3.connect(db.as_uri() + '?mode=ro', uri=True) as conn:
-                    events = conn.execute('SELECT time,message FROM events ORDER BY id DESC LIMIT 10').fetchall()
-                lines += [datetime.datetime.fromtimestamp(t).strftime('%H:%M:%S') + '  ' + m for t, m in reversed(events)]
+                      '[P] Pause schedule  [R] Resume  [O] Open folder  [Q] Quit']
             print('\033[2J\033[H' + '\n'.join(safe(line) for line in lines), flush=True)
             if not select.select([sys.stdin], [], [], 1)[0]:
                 continue
@@ -266,18 +301,15 @@ def main(argv=None):
             folder = read_json(paths.settings).get('local_dir', str(Path.home() / 'GoogleDrive'))
             return subprocess.call(['xdg-open', folder])
         return watch(paths)
-    except KeyboardInterrupt:
-        if command == 'sync':
-            paths.record('interrupted', 'Sync interrupted. Completed files are saved; run sync to resume.', current=None)
+    except KeyboardInterrupt as error:
+        activity = getattr(args, '_activity', None)
+        if command == 'sync' and not (activity and activity.failed):
+            Activity(paths).failure(*error_details(error))
         return 130
     except (DriveError, sqlite3.Error, OSError, ValueError) as error:
-        if isinstance(error, DriveError):
-            message, kind = str(error), error.kind
-        elif isinstance(error, sqlite3.Error):
-            message, kind = 'Cannot read the sync database. Your files were retained; restore the database from backup.', 'blocked'
-        else:
-            message, kind = 'A local file could not be read or stored. Check permissions and available disk space.', 'blocked'
-        if command == 'sync' and not (isinstance(error, Blocked) and 'Another sync' in str(error)):
-            paths.record(kind, message, current=None)
+        kind, message = error_details(error)
+        activity = getattr(args, '_activity', None)
+        if command == 'sync' and not (activity and activity.failed) and not (isinstance(error, Blocked) and 'Another sync' in str(error)):
+            Activity(paths).failure(kind, message)
         print(kind.upper() + ': ' + safe(message), file=sys.stderr)
         return 1

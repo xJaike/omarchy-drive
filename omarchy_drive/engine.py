@@ -10,6 +10,8 @@ import tempfile
 import time
 import uuid
 from .drive import digest
+from .activity import Activity
+from .selection import includes
 from .storage import Blocked, atomic_json
 
 IGNORED = {'RCLONE_TEST'}  # Legacy access marker; it is never needed by this engine.
@@ -139,20 +141,27 @@ def plan(local, remote, baseline, max_deletes=20, allow_many_deletes=False):
 
 
 class Engine:
-    def __init__(self, paths, settings, store, drive):
+    def __init__(self, paths, settings, store, drive, activity=None):
         self.paths, self.settings, self.store, self.drive = paths, settings, store, drive
         self.root = Path(settings['local_dir'])
         self.archive_root = self.root.parent / ('.' + self.root.name + '-omarchy-drive-backups')
         self.run_id = time.strftime('%Y%m%dT%H%M%S') + '-' + uuid.uuid4().hex[:8]
         self.remote, self.local = {}, {}
+        self.activity = activity or Activity(paths)
+        self.drive.progress = self.activity.transfer
 
     def snapshot(self, allow_many_deletes=False):
         self.local = scan_local(self.root)
         # Build complete listings before any local or cloud mutation.
-        self.remote = self.drive.scan(self.settings['folder_id'])
+        # Only recurse into selected remote directories. Local scanning remains
+        # complete so unsupported file types cannot masquerade as deletions.
+        self.remote = self.drive.scan(self.settings['folder_id'],
+            selected=self.settings.get('selected_folders'), root_files=self.settings.get('root_files', True))
+        self.local = {p: item for p, item in self.local.items() if includes(p, item, self.settings)}
         info = self.root.stat()
         self.store.identity(json.dumps([str(self.root.resolve()), info.st_dev, info.st_ino, self.settings['folder_id']]))
-        return plan(self.local, self.remote, self.store.baseline(), self.settings.get('max_deletes', 20), allow_many_deletes)
+        baseline = {p: item for p, item in self.store.baseline().items() if includes(p, item, self.settings)}
+        return plan(self.local, self.remote, baseline, self.settings.get('max_deletes', 20), allow_many_deletes)
 
     def checked_local(self, path, expected):
         target = local_path(self.root, path)
@@ -222,6 +231,7 @@ class Engine:
         return self.settings['folder_id'] if parent == '.' else self.remote[parent]['id']
 
     def download(self, path, item, expected):
+        self.activity.phase('download', path, item['size'])
         key = hashlib.sha256((item['id'] + ':' + item['hash']).encode()).hexdigest()
         partial = self.paths.state / 'downloads' / (key + '.part')
         self.drive.download(item, partial)
@@ -246,23 +256,28 @@ class Engine:
             self.remember(path, item)
             self.local[path] = dict(kind='file', hash=item['hash'], size=item['size'])
             partial.unlink(missing_ok=True)
+            self.activity.file_done('download', path, item['size'])
         finally:
             Path(temporary).unlink(missing_ok=True)
 
     def upload(self, path, expected, existing):
+        self.activity.phase('prepare', path, expected['size'], 'Preparing upload')
         staged = self.staging(path, expected)
         try:
             if existing:
                 # Preserve the cloud version independently of Drive revision retention.
                 key = hashlib.sha256((existing['id'] + existing['hash']).encode()).hexdigest()
                 old = self.paths.state / 'downloads' / (key + '.part')
+                self.activity.phase('backup', path, existing['size'])
                 self.drive.download(existing, old)
                 self.backup(path + '.cloud-before-upload', old, existing['hash'])
                 old.unlink(missing_ok=True)
+            self.activity.phase('upload', path, expected['size'])
             item = self.drive.upload(staged, self.parent_id(path), PurePosixPath(path).name, expected['hash'], existing)
             self.remote[path] = item
             # If the user edited during upload, the next run detects that edit.
             self.remember(path, item)
+            self.activity.file_done('upload', path, expected['size'])
         finally:
             staged.unlink(missing_ok=True)
 
@@ -299,17 +314,22 @@ class Engine:
         self.store.event(f'Conflict kept both versions: {path} and {conflict}')
 
     def sync(self, allow_many_deletes=False):
-        self.paths.record('running', 'Scanning local files and Google Drive…', current=None)
+        if not self.activity.started:
+            self.activity.start()
         actions = self.snapshot(allow_many_deletes)
         changed = [a for a in actions if a.kind not in ('remember', 'forget')]
-        self.paths.record('running', f'{len(changed)} changes to apply', total=len(changed), completed=0)
+        self.activity.planned(changed)
         completed = 0
         for action in actions:
             path = action.path
             left, right = self.local.get(path), self.remote.get(path)
             if left and right and left['kind'] == right['kind'] == 'file' and left['hash'] == right['hash']:
                 self.remember(path, right)
+                if action.kind not in ('remember', 'forget'):
+                    self.activity.complete(action, skipped=True)
                 continue
+            if action.kind not in ('remember', 'forget'):
+                self.activity.begin(action)
             if action.kind == 'mkdir-local':
                 target = local_path(self.root, path)
                 target.mkdir(parents=True, exist_ok=True)
@@ -336,6 +356,7 @@ class Engine:
                 self.checked_local(path, None)
                 key = hashlib.sha256((right['id'] + right['hash']).encode()).hexdigest()
                 old = self.paths.state / 'downloads' / (key + '.part')
+                self.activity.phase('backup', path, right['size'])
                 self.drive.download(right, old)
                 self.backup(path + '.cloud-before-trash', old, right['hash'])
                 self.drive.trash(right)
@@ -345,6 +366,6 @@ class Engine:
             if action.kind not in ('remember', 'forget'):
                 completed += 1
                 self.store.event(action.kind + ': ' + path)
-                self.paths.record('running', action.kind + ': ' + path, completed=completed, current=None)
-        self.paths.record('success', f'Up to date. Applied {completed} changes.', current=None)
+                self.activity.complete(action)
+        self.activity.finish()
         return changed

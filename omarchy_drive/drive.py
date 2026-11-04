@@ -77,7 +77,7 @@ class Drive:
             raise Blocked(f'Drive folder {name} does not exist. Use setup --create-folder to create it.')
         return self.mkdir('root', name, 'root:' + name)['id']
 
-    def scan(self, folder_id):
+    def scan(self, folder_id, selected=None, root_files=True):
         root = self.get(folder_id)
         if root.get('trashed') or root.get('mimeType') != FOLDER:
             raise Blocked('The configured Google Drive folder is missing or in Trash. Restore it before syncing.')
@@ -92,6 +92,8 @@ class Drive:
                 if path in result:
                     raise Blocked(f'Duplicate Drive names at {path}. Rename the duplicates before syncing.')
                 folder = item['mimeType'] == FOLDER
+                if not prefix and (folder and selected is not None and name not in selected or not folder and not root_files):
+                    continue
                 unsupported = item['mimeType'].startswith('application/vnd.google-apps.') and not folder
                 if not folder and not unsupported and not item.get('md5Checksum'):
                     raise Blocked(f'Drive did not return a checksum for {path}. Sync stopped before changes.')
