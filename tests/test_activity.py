@@ -178,7 +178,7 @@ class BlockedPathFromCommandTests(unittest.TestCase):
             store = Store(paths.state)
             self.addCleanup(store.close)
             return paths.configured(), store, MemoryDrive()
-        with patch('omarchy_drive.cli.context', context), contextlib.redirect_stderr(io.StringIO()):
+        with patch('omarchy_drive.cli.context', context), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return main(['sync'])
 
     def test_sync_failure_reaches_status_with_its_path(self):
