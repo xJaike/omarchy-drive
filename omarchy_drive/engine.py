@@ -11,11 +11,10 @@ import time
 import uuid
 from .drive import digest
 from .activity import Activity
-from .selection import includes
+from .selection import IGNORED, includes
 from .home_folders import mappings, record_identity
 from .storage import Blocked, atomic_json
 
-IGNORED = {'RCLONE_TEST'}  # Legacy access marker; it is never needed by this engine.
 TEMP_PREFIX = '.omarchy-drive-tmp-'
 
 

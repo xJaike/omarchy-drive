@@ -114,6 +114,27 @@ class HomeFolderTests(HomeFolderCase):
             dict(name='Documents', selected=False, error=''),
             dict(name='GoogleDrive', selected=False, error='')])
 
+    def test_reserved_marker_name_cannot_be_ticked(self):
+        marker = self.home/'RCLONE_TEST'
+        marker.mkdir()
+        before = self.paths.settings.read_bytes()
+        with self.assertRaisesRegex(Blocked, 'RCLONE_TEST'):
+            select(self.paths, 'RCLONE_TEST', True)
+        self.assertEqual(self.paths.settings.read_bytes(), before)
+        row = next(row for row in choices(self.paths.configured(), self.paths) if row['name'] == 'RCLONE_TEST')
+        self.assertIn('RCLONE_TEST', row['error'])
+
+    def test_hand_edited_reserved_marker_entry_blocks_sync_without_a_traceback(self):
+        marker = self.home/'RCLONE_TEST'
+        marker.mkdir()
+        (marker/'inner.txt').write_bytes(b'x')
+        self.settings(home_folders={'RCLONE_TEST': {}})
+        with self.assertRaisesRegex(Blocked, 'RCLONE_TEST'):
+            self.engine().sync()
+        self.assertEqual(self.drive.calls, [])
+        select(self.paths, 'RCLONE_TEST', False)  # Unticking must always work.
+        self.assertEqual(self.paths.configured()['home_folders'], {})
+
     def test_reveal_uses_home_folder_and_rejects_traversal(self):
         self.enable()
         with patch('omarchy_drive.panel.subprocess.run') as run:

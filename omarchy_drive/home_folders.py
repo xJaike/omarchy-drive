@@ -1,7 +1,7 @@
 """Ticked home folders and exclusions; no symlinks and no implicit home scan."""
 import os
 from pathlib import Path
-from .selection import folder_name, valid_path
+from .selection import IGNORED, folder_name, valid_path
 from .storage import Blocked, Store, atomic_json, read_json
 
 
@@ -10,6 +10,8 @@ def validate(name, entry, state):
     folder_name(name)
     if name.startswith('.'):
         raise Blocked('Hidden home folders cannot be synced. Choose a visible folder.')
+    if name in IGNORED:
+        raise Blocked(f'~/{name} is a name Omarchy Drive reserves, so it cannot sync. Choose another folder.')
     if entry is not None and not isinstance(entry, dict):
         raise Blocked(f'Your folder settings for {name} are invalid. Restore settings.json.')
     identity = entry.get('identity') if entry else None

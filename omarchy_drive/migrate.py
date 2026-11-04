@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 import tempfile
 
-from .engine import IGNORED, TEMP_PREFIX
+from .engine import TEMP_PREFIX
+from .selection import IGNORED
 from .storage import Blocked, Store, atomic_json, read_json
 
 OLD_KEYS = ('local_dir', 'selected_folders', 'root_files')

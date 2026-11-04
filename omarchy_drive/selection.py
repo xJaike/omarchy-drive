@@ -1,6 +1,8 @@
 """Selection is exclusion, never deletion. Re-enabling starts a merging baseline."""
 from .storage import Blocked
 
+IGNORED = {'RCLONE_TEST'}  # Legacy access marker; it is never needed by this engine.
+
 
 def in_subtree(path, root):
     return path == root or path.startswith(root + '/')
