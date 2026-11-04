@@ -703,24 +703,289 @@ git commit -m "Show one expandable Folders list in the panel"
 
 Each numbered step needs the user's approval when you reach it. **Stop and ask first.** Keep scripts in the session scratchpad; none are committed. Never run a sync with `--allow-many-deletes`.
 
-- [ ] **Step 1: Real Drive writes (ask first).** Using the user's sign-in and temporary `HOME` and `XDG_STATE_HOME` directories, create a new Drive folder named `omarchy-drive-test-<random>`, containing one test file. Using `Drive` directly, confirm:
+Rules for the trial scripts in Steps 1 and 2:
+
+- Set the app's locations by assigning `os.environ` in Python, **before** any `omarchy_drive` import, then assert every `Paths()` value is inside the trial directory before calling anything. Never build environment assignments in one shell variable. That is how an earlier smoke test missed its variables and migrated the real settings.
+- A trial directory comes from `mktemp -d ~/.cache/omarchy-drive-trial.XXXX`, which is mode 0700 and on the same filesystem as home. `/tmp` is tmpfs here and fails the same-disk check. It holds tokens, so delete it afterwards, including after a failure.
+- Never print an upload session URL or a token, in any step.
+
+Both scripts start the same way. Step 1 adds `HOME` to the assignments; Step 2 keeps the real `HOME`, because it reads the real home folders.
+
+```python
+import os, sys
+from pathlib import Path
+
+REPO = Path.home() / 'Projects/omarchy-drive'
+REAL_CONFIG = Path.home() / '.config/omarchy-drive'
+REAL_DB = Path.home() / '.local/state/omarchy-drive-v2/sync.sqlite3'
+trial = Path(sys.argv[1]).resolve()
+assert trial.stat().st_mode & 0o777 == 0o700
+assert trial.stat().st_dev == Path.home().stat().st_dev
+os.environ.update(XDG_CONFIG_HOME=str(trial / 'config'), XDG_STATE_HOME=str(trial / 'state'))
+sys.path.insert(0, str(REPO))
+from omarchy_drive.storage import Paths
+paths = Paths()
+for location in (paths.config, paths.state, paths.settings, paths.tokens, paths.client, paths.status, paths.backups):
+    assert location.is_relative_to(trial), location
+paths.prepare()
+```
+
+- [ ] **Step 1: Real Drive writes (ask first).** Using the user's sign-in, copied into a trial directory, with a temporary `HOME` as well, create a new Drive folder named `omarchy-drive-test-<random>`, containing one test file. Use the real `Drive.upload` and `Drive.trash`. Never call `cli.main` or `panel.main`. Confirm:
   - Overwriting with a current ETag succeeds, and the content checksum changes.
+  - After that overwrite, `name`, `parents` and `mimeType` are unchanged, because `drive.py:229` always sends `application/octet-stream`. A file already of that type would prove nothing, so give the test file another type first.
   - An overwrite with a stale `If-Match` gets 412, and the content is unchanged.
   - A trash with a stale `If-Match` gets 412, and the file is not trashed.
   - A trash with a current ETag succeeds.
 
-  Afterwards, move the test folder to Trash and report all four results. If either stale write is not rejected, stop and report it, because the spec's protection against edits arriving mid-sync would not hold.
+  A stale `existing` argument stops in `Drive.unchanged` and never reaches Google, which would pass without testing anything. So keep the ETag from before the overwrite and put it in through `condition`:
 
-- [ ] **Step 2: Trial migration (ask first).** Copy `~/.config/omarchy-drive/settings.json`, `tokens.json`, `client.json` and the state database into temporary `XDG_CONFIG_HOME` and `XDG_STATE_HOME` directories. With `HOME` unchanged, run `migrate`, then `omarchy-drive preview` from the repo.
+  ```python
+  # After the common start, with HOME=str(trial / 'home') added and that directory created.
+  import shutil, uuid
+  from unittest.mock import patch
+  from omarchy_drive.auth import Tokens
+  from omarchy_drive.drive import API, CHANGED_ON_DRIVE, Drive, FIELDS, digest, query_url
+  from omarchy_drive.http import APIError, HTTP
+  from omarchy_drive.storage import Blocked, Store
 
-  Expected: `0 proposed changes`, unless the user has changed files since the last sync. Explain any difference before continuing. Confirm with `sha256sum` that the real `settings.json` did not change.
+  shutil.copy2(REAL_CONFIG / 'tokens.json', paths.tokens)
+  shutil.copy2(REAL_CONFIG / 'client.json', paths.client)
+  drive = Drive(HTTP(Tokens(paths)), Store(paths.state), paths.state)
+  versions = {}
+  for label in ('v1', 'v2', 'v3'):
+      versions[label] = trial / label
+      versions[label].write_bytes(label.encode())
+  sums = {label: digest(path) for label, path in versions.items()}
 
-- [ ] **Step 3: Show what installing would change (ask first).** Compare the repo with `~/.config/omarchy/plugins/io.github.xjaike.google-drive`, listing every file that would change and the plugin checkout's own uncommitted changes. The earlier comparison showed it matches in code apart from the docs and tests; confirm that again. Then install only with approval. Afterwards, run `omarchy-drive preview` and expect 0 changes.
+  def rejected(attempt, stale):
+      with patch.object(drive, 'condition', return_value=stale):
+          try:
+              attempt()
+          except Blocked as error:
+              assert str(error) == CHANGED_ON_DRIVE and isinstance(error.__cause__, APIError) and error.__cause__.status == 412, error
+              return
+      raise SystemExit('A stale write was NOT rejected. Stop and report it.')
 
-- [ ] **Step 4: Panel check (ask first).** With the user, reload the shell and go through:
+  folder = drive.mkdir('root', 'omarchy-drive-test-' + uuid.uuid4().hex[:8], 'test-folder')
+  try:
+      file_id = drive.upload(versions['v1'], folder['id'], 'probe.txt', sums['v1'])['id']
+      if drive.get(file_id)['mimeType'] == 'application/octet-stream':
+          drive.http.json('PATCH', query_url(API + 'files/' + file_id, fields=FIELDS), data={'mimeType': 'text/plain'})
+      before = drive.get(file_id)
+      stale = drive.condition(before)
+
+      drive.upload(versions['v2'], folder['id'], 'probe.txt', sums['v2'], before)
+      after = drive.get(file_id)
+      assert after['md5Checksum'] == sums['v2'] != before['md5Checksum']
+      for key in ('name', 'parents', 'mimeType'):
+          assert after[key] == before[key], (key, before[key], after[key])
+      print('Overwrite with a current ETag: OK, name, parents and', before['mimeType'], 'kept')
+
+      rejected(lambda: drive.upload(versions['v3'], folder['id'], 'probe.txt', sums['v3'], after), stale)
+      assert drive.get(file_id)['md5Checksum'] == sums['v2']
+      print('Stale overwrite: 412, content unchanged')
+
+      rejected(lambda: drive.trash(after), stale)
+      assert drive.get(file_id)['trashed'] is False
+      print('Stale trash: 412, not trashed')
+
+      drive.trash(drive.get(file_id))
+      assert drive.get(file_id)['trashed'] is True
+      print('Trash with a current ETag: OK')
+  finally:
+      drive.trash(drive.get(folder['id']))
+  ```
+
+  Afterwards, confirm the test folder is in Trash, delete the trial directory, and report all five results. If either stale write is not rejected, stop and report it, because the spec's protection against edits arriving mid-sync would not hold. If `mimeType` changes, stop and report it, because every overwritten file on the user's Drive would change type.
+
+- [ ] **Step 2: Trial migration (ask first).** Stop anything that could change the database while it is copied, and confirm:
+
+  ```bash
+  systemctl --user is-enabled omarchy-drive-sync.timer   # Write this down.
+  systemctl --user stop omarchy-drive-sync.timer omarchy-drive-sync.service
+  systemctl --user is-active omarchy-drive-sync.timer omarchy-drive-sync.service   # Both must print inactive. Stop if either prints active.
+  trial=$(mktemp -d ~/.cache/omarchy-drive-trial.XXXX)
+  python3 trial_migration.py "$trial"; rm -rf "$trial"; test ! -e "$trial" && echo removed
+  ```
+
+  Ask the user not to press **Sync now** meanwhile. `trial_migration.py` is the common start, followed by the code below. It copies the settings and sign-in, and copies the database with the SQLite backup API, because the database uses WAL and a plain copy can miss rows. `HOME` stays real, so the real home folders are read and nothing in them is written.
+
+  ```python
+  import contextlib, hashlib, io, json, shutil, sqlite3
+  from omarchy_drive import cli
+  from omarchy_drive.migrate import OLD_KEYS, migrate
+  from omarchy_drive.storage import Store, read_json
+
+  real_settings = REAL_CONFIG / 'settings.json'
+  checksum = lambda: hashlib.sha256(real_settings.read_bytes()).hexdigest()
+  real_before = checksum()
+  for name in ('settings.json', 'tokens.json', 'client.json'):
+      shutil.copy2(REAL_CONFIG / name, paths.config / name)
+  source = sqlite3.connect(REAL_DB.as_uri() + '?mode=ro', uri=True)
+  target = sqlite3.connect(paths.state / 'sync.sqlite3')
+  source.backup(target)
+  target.close()
+
+  def facts():
+      store = Store(paths.state)
+      try:
+          return read_json(paths.settings), store.baseline(), store.stored_identity()
+      finally:
+          store.close()
+
+  settings, baseline, _ = facts()
+  assert 'local_dir' in settings, 'These settings are already migrated. Stop and ask.'
+  print('Baseline rows before:', len(baseline))
+  assert migrate(paths) is True
+  migrated, kept, identity = facts()
+  assert kept == baseline, 'The migration changed the sync history.'
+  assert migrated.get('home_folders') == settings.get('home_folders')
+  assert identity == migrated['folder_id']
+  assert not set(OLD_KEYS) & migrated.keys()
+
+  output = io.StringIO()
+  with contextlib.redirect_stdout(output):
+      code = cli.main(['preview'])
+  print(output.getvalue())
+  assert code == 0
+  print('RCLONE_TEST in preview:', 'RCLONE_TEST' in output.getvalue())
+
+  database = sqlite3.connect(paths.state / 'sync.sqlite3')
+  for key, data in database.execute('SELECT key, data FROM pending'):
+      # A session value is a live upload URL.
+      print('Pending:', key, {name: '<hidden>' if name == 'session' else value for name, value in json.loads(data).items()})
+  database.close()
+
+  assert checksum() == real_before, 'The real settings.json changed.'
+  assert source.execute('SELECT COUNT(*) FROM baseline').fetchone()[0] == len(baseline)
+  source.close()
+  ```
+
+  Expected:
+  - 251 baseline rows remain, or the count printed just before if the user has synced since that was recorded. `home_folders` is unchanged, and the identity row equals `folder_id`. `0 proposed changes` alone proves nothing, because with an empty baseline identical files become `remember`, which preview hides.
+  - `0 proposed changes`, unless the user has changed files since the last sync. Explain any difference before continuing.
+  - `RCLONE_TEST` does not appear. Only the exact top-level name is ignored, so a copy inside a ticked folder, such as `Work/RCLONE_TEST`, would now sync as an ordinary file. If it appears, explain it before continuing.
+  - Each pending row is explained: what it was creating or overwriting, and whether it can still resume on the next sync. Do not delete one.
+
+  Confirm the trial directory is gone, because it holds tokens. If the user stops here, start the timer again only if `is-enabled` said it was enabled.
+
+- [ ] **Step 3: Install (ask first).** **Installing is also the migration.** As soon as the plugin's files change, the running panel's status poll runs the new code and migrates the real settings within seconds, before `install.sh` runs. Automatic sync could run straight after, so everything below happens before any file changes.
+
+  1. Turn the timer off and stop the service. The timer stays off through Step 4.
+
+     ```bash
+     systemctl --user disable --now omarchy-drive-sync.timer
+     systemctl --user stop omarchy-drive-sync.service
+     systemctl --user is-active omarchy-drive-sync.timer omarchy-drive-sync.service   # Both must print inactive. Stop if either prints active.
+     ```
+
+  2. Show what installing would change. Compare the repo with `~/.config/omarchy/plugins/io.github.xjaike.google-drive`, listing every file that would change and the plugin checkout's own uncommitted changes. The earlier comparison showed it matches in code apart from the docs and tests; confirm that again.
+
+  3. Record the plugin's commit and uncommitted changes as the restore point:
+
+     ```bash
+     plugin=~/.config/omarchy/plugins/io.github.xjaike.google-drive
+     restore=$(mktemp -d ~/.cache/omarchy-drive-restore.XXXX)
+     git -C "$plugin" rev-parse HEAD > "$restore/plugin-commit"
+     git -C "$plugin" status --short > "$restore/plugin-status"
+     git -C "$plugin" diff --binary HEAD > "$restore/plugin.diff"
+     git -C "$plugin" ls-files --others --exclude-standard -z | tar --null -C "$plugin" -T - -czf "$restore/plugin-untracked.tar.gz"
+     ```
+
+  4. Confirm no earlier migration's copies are present. `migrate` keeps a copy it finds, so an old one would become the undo copy without anyone noticing. If either exists, stop and ask.
+
+     ```bash
+     test ! -e ~/.config/omarchy-drive/settings.json.pre-migration && test ! -e ~/.config/omarchy-drive/identity.pre-migration && echo clear
+     ```
+
+  5. Take a real backup of `settings.json` and the database, and record what must survive. Use the SQLite backup API here too. This reads the real files only, and imports nothing from the app. Save it as `record_state.py`, and run it as `python3 record_state.py "$restore"`.
+
+     ```python
+     import json, shutil, sqlite3, sys
+     from pathlib import Path
+
+     restore = Path(sys.argv[1])
+     settings_file = Path.home() / '.config/omarchy-drive/settings.json'
+     database_file = Path.home() / '.local/state/omarchy-drive-v2/sync.sqlite3'
+     shutil.copy2(settings_file, restore / 'settings.json')
+     source = sqlite3.connect(database_file.as_uri() + '?mode=ro', uri=True)
+     target = sqlite3.connect(restore / 'sync.sqlite3')
+     source.backup(target)
+     assert target.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+     settings = json.loads(settings_file.read_text())
+     expected = dict(baseline=source.execute('SELECT COUNT(*) FROM baseline').fetchone()[0],
+                     home_folders=settings.get('home_folders'), folder_id=settings['folder_id'])
+     (restore / 'expected.json').write_text(json.dumps(expected))
+     print('Baseline rows:', expected['baseline'])
+     ```
+
+  6. Install only with approval: put the files the comparison listed into the plugin checkout, then run `bash "$plugin/install.sh"`. Ignore its `Next: omarchy-drive setup` line; this installation is already connected.
+
+  7. With the timer still off, run `omarchy-drive preview`, then assert the same facts as Step 2 on the real files. Save this as `check_state.py`, and run it as `python3 check_state.py "$restore"`.
+
+     ```python
+     import json, sqlite3, sys
+     from pathlib import Path
+
+     expected = json.loads((Path(sys.argv[1]) / 'expected.json').read_text())
+     settings = json.loads((Path.home() / '.config/omarchy-drive/settings.json').read_text())
+     database_file = Path.home() / '.local/state/omarchy-drive-v2/sync.sqlite3'
+     database = sqlite3.connect(database_file.as_uri() + '?mode=ro', uri=True)
+     baseline = database.execute('SELECT COUNT(*) FROM baseline').fetchone()[0]
+     identity = database.execute("SELECT value FROM metadata WHERE key='identity'").fetchone()[0]
+     assert 'local_dir' not in settings
+     assert baseline == expected['baseline'], (baseline, expected['baseline'])
+     assert settings.get('home_folders') == expected['home_folders']
+     assert identity == settings['folder_id'] == expected['folder_id']
+     print('Baseline rows:', baseline, '- home_folders and identity match')
+     ```
+
+     Expected: `0 proposed changes`, and all assertions pass. If not, stop with the timer off, tell the user, and use the restore point with the undo steps in `docs/STANDALONE_SETUP.md`.
+
+  Keep `$restore` until the user says it can go. `omarchy-drive resume` comes only after Step 4, and only if the user wants the timer on. It was off before this work, so do not turn it on unasked.
+
+- [ ] **Step 4: Panel check (ask first).** Have the restore point from Step 3 ready first, with the path to it in front of you. With the user, and the timer still off, reload the shell and go through:
   - the list loads, with `GoogleDrive` unticked and `Documents`, `Music`, `Pictures`, `Work` ticked
   - expanding rows, and using the keyboard (Up, Down, Left, Right, Space, `o`)
   - excluding and re-including a test file, then running preview after each
+  - excluding several items quickly while a row is loading, because the tree re-fetch depends on Quickshell process behaviour that no test has verified: killing a running read, then starting the next one. Each row must end up correct, none stuck on `Loading…`, and `excluded` in `settings.json` must hold exactly what was clicked
   - the Backups button
 
-- [ ] **Step 5: Success criteria.** Confirm each of the spec's five success criteria, and report any not demonstrated. Deleting `~/GoogleDrive` is the user's own step, then one sync to confirm criterion 1.
+- [ ] **Step 5: First real sync (ask first).** With the timer still off, confirm the first sync writes nothing unexpected to Drive. List the Drive side before and after, with this read-only script. It uses a throwaway database, so it cannot touch the real one, and it may refresh the sign-in, as the app does. Save it as `drive_listing.py`.
+
+  ```python
+  import json, sys, tempfile
+  from pathlib import Path
+
+  sys.path.insert(0, str(Path.home() / 'Projects/omarchy-drive'))
+  from omarchy_drive.auth import Tokens
+  from omarchy_drive.drive import Drive
+  from omarchy_drive.http import HTTP
+  from omarchy_drive.selection import includes
+  from omarchy_drive.storage import Paths, Store, read_json
+
+  paths = Paths()
+  settings = read_json(paths.settings)
+  with tempfile.TemporaryDirectory(dir=Path.home() / '.cache') as scratch:
+      store = Store(scratch)
+      items = Drive(HTTP(Tokens(paths)), store, scratch).scan(settings['folder_id'], lambda path: includes(path, settings))
+      store.close()
+  rows = {path: [item['id'], item.get('md5Checksum'), item.get('modifiedTime')] for path, item in items.items()}
+  Path(sys.argv[1]).write_text(json.dumps(rows, indent=0, sort_keys=True))
+  print(len(rows), 'Drive items')
+  ```
+
+  ```bash
+  python3 drive_listing.py "$restore/drive-before.json"
+  omarchy-drive preview
+  omarchy-drive sync
+  python3 drive_listing.py "$restore/drive-after.json"
+  diff "$restore/drive-before.json" "$restore/drive-after.json"
+  python3 check_state.py "$restore"
+  ```
+
+  Expected: `Applied` reports the same number of changes as the preview, and `diff` shows only what the preview listed, so nothing at all for `0 proposed changes`. The baseline count equals the one recorded in Step 3, plus any new files the preview listed. A file excluded and re-included in Step 4 returns to the count with this sync. Explain any other difference, and do not turn the timer on until it is explained.
+
+- [ ] **Step 6: Success criteria.** Confirm each of the spec's five success criteria, and report any not demonstrated. Deleting `~/GoogleDrive` is the user's own step, then one sync to confirm criterion 1.
+
+- [ ] **Step 7: Run CI on the branch (ask first).** Before merging, push `optional-folders` so CI exercises Python 3.11 and 3.13, because the suite has only run on 3.14 here. Pushing needs the user's approval. Merge only once both jobs pass.
