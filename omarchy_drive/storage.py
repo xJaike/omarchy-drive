@@ -15,6 +15,10 @@ class DriveError(Exception):
 class Blocked(DriveError):
     kind = 'blocked'
 
+    def __init__(self, message, path=None):
+        super().__init__(message)
+        self.path = path
+
 
 class AuthRequired(DriveError):
     kind = 'auth'
@@ -61,6 +65,7 @@ class Paths:
         self.client = self.config / 'client.json'
         self.tokens = self.config / 'tokens.json'
         self.status = self.state / 'status.json'
+        self.backups = self.state / 'backups'
 
     def prepare(self):
         for folder in (self.config, self.state):
@@ -69,7 +74,7 @@ class Paths:
 
     def configured(self):
         value = read_json(self.settings)
-        if not value.get('folder_id') or not value.get('local_dir'):
+        if not value.get('folder_id'):
             raise AuthRequired('Connect your Google account first: omarchy-drive setup')
         return value
 
@@ -136,6 +141,19 @@ class Store:
             raise Blocked('The sync folder or account changed. Use a separate state directory.')
         with self.db:
             self.db.execute("INSERT OR IGNORE INTO metadata VALUES ('identity',?)", (value,))
+
+    def stored_identity(self):
+        row = self.db.execute("SELECT value FROM metadata WHERE key='identity'").fetchone()
+        return row[0] if row else None
+
+    def replace_identity(self, value):
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO metadata VALUES ('identity',?)", (value,))
+
+    def forget_subtree(self, path):
+        # Range on '/'..'0' (the next code point) so '_' and '%' in names stay literal.
+        with self.db:
+            self.db.execute('DELETE FROM baseline WHERE path=? OR (path>=? AND path<?)', (path, path + '/', path + '0'))
 
     def event(self, message):
         with self.db:
