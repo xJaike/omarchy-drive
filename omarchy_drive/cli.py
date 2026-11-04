@@ -195,6 +195,8 @@ def doctor(paths):
             included = lambda path: includes(path, settings)
             local = {}
             for name, source in mappings(settings, paths).items():
+                if not source.exists():
+                    continue  # Drive-only, as in the engine.
                 if included(name):
                     local[name] = {'kind': 'dir'}
                     local.update(scan_local(source, name + '/', included))

@@ -64,9 +64,62 @@ class MigrateTests(unittest.TestCase):
         self.assertEqual({a.kind for a in actions}, {'remember'})
         self.assertFalse(migrate(self.paths))
 
+    def identity_backup(self):
+        return self.paths.settings.with_name('identity.pre-migration')
+
+    def test_unrecognised_identity_values_stop_and_change_nothing(self):
+        row = json.dumps([str(self.local), 1, 2, 'root'])
+        for value in ('other-folder', json.dumps([1, 2, 'root']), json.dumps([1, 2, 3, 'root', 5]),
+                      json.dumps({'folder': 'root'}), json.dumps([str(self.local), 1, 2, None]), '', '12'):
+            with self.subTest(value=value):
+                self.store.replace_identity(value)
+                before = self.paths.settings.read_bytes()
+                with self.assertRaises(Blocked):
+                    migrate(self.paths)
+                self.assertEqual(self.paths.settings.read_bytes(), before)
+                self.assertEqual(self.store.stored_identity(), value)
+                self.assertFalse(self.backup().exists())
+                self.assertFalse(self.identity_backup().exists())
+
+    def test_failed_identity_rewrite_leaves_settings_and_reruns(self):
+        with patch.object(Store, 'replace_identity', side_effect=OSError('disk')):
+            with self.assertRaises(OSError):
+                migrate(self.paths)
+        self.assertIn('local_dir', self.paths.configured())
+        self.assertTrue(migrate(self.paths))
+        self.assertNotIn('local_dir', self.paths.configured())
+        self.assertEqual(self.store.stored_identity(), 'root')
+
+    def test_identity_original_text_is_saved_once(self):
+        original = self.store.stored_identity()
+        migrate(self.paths)
+        self.assertEqual(self.identity_backup().read_text(), original)
+
+    def test_identity_original_survives_crash_after_row_rewrite(self):
+        original = self.store.stored_identity()
+        import omarchy_drive.migrate as module
+        real = module.atomic_json
+        def crash(path, value):
+            if Path(path) == self.paths.settings:
+                raise OSError('crash')
+            real(path, value)
+        with patch.object(module, 'atomic_json', crash):
+            with self.assertRaises(OSError):
+                migrate(self.paths)
+        self.assertEqual(self.store.stored_identity(), 'root')
+        self.assertTrue(migrate(self.paths))
+        self.assertEqual(self.identity_backup().read_text(), original)
+
+    def test_no_stored_identity_writes_no_identity_backup(self):
+        self.store.db.execute("DELETE FROM metadata WHERE key='identity'")
+        self.store.db.commit()
+        self.assertTrue(migrate(self.paths))
+        self.assertFalse(self.identity_backup().exists())
+
     def test_contents_in_local_dir_change_nothing_and_name_them(self):
         (self.local/'Work2').mkdir()
         (self.local/'notes.txt').write_text('n')
+        (self.local/'.secret').write_text('s')
         before = self.paths.settings.read_bytes()
         identity = self.store.stored_identity()
         with self.assertRaises(Blocked) as caught:
@@ -74,6 +127,7 @@ class MigrateTests(unittest.TestCase):
         self.assertIn('Move these out of', str(caught.exception))
         self.assertIn('notes.txt', str(caught.exception))
         self.assertIn('Work2', str(caught.exception))
+        self.assertIn('.secret', str(caught.exception))
         self.assertEqual(self.paths.settings.read_bytes(), before)
         self.assertEqual(self.store.stored_identity(), identity)
         self.assertFalse(self.backup().exists())

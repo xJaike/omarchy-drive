@@ -193,6 +193,19 @@ class ContinueSetupTests(unittest.TestCase):
             self.assertFalse(settings.get('home_folders'))
             self.assertEqual(sorted(p.name for p in Path(directory).iterdir()), ['config', 'state'])
 
+    def test_doctor_accepts_a_drive_only_ticked_folder(self):
+        from omarchy_drive.cli import doctor
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+                'HOME': directory, 'XDG_CONFIG_HOME': directory + '/config', 'XDG_STATE_HOME': directory + '/state'}):
+            paths = Paths()
+            paths.prepare()
+            atomic_json(paths.settings, {'folder_id': 'root', 'home_folders': {'Cloud': {'identity': None}}})
+            output = io.StringIO()
+            with patch('omarchy_drive.cli.context') as make, contextlib.redirect_stdout(output):
+                make.return_value = (paths.configured(), Store(paths.state), MagicMock(scan=MagicMock(return_value={})))
+                self.assertEqual(doctor(paths), 0)
+            self.assertIn('Local scan: OK (0 items)', output.getvalue())
+
     def test_doctor_works_without_local_dir(self):
         from omarchy_drive.cli import doctor
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
