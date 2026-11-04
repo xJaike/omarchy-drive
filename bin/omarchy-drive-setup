@@ -1,34 +1,6 @@
-#!/usr/bin/env bash
-set -euo pipefail
-state="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-drive-sync"
-if ! rclone listremotes | rg -qx 'omarchy-drive:'; then
-  echo 'Create a Google Drive remote named omarchy-drive using: rclone config' >&2
-  echo 'Use your own OAuth client ID; see https://rclone.org/drive/#making-your-own-client-id' >&2
-  exit 1
-fi
-# Refuse to initialize against a missing or ambiguous folder.
-rclone lsjson omarchy-drive: --dirs-only --max-depth 1 | python3 -c '
-import json, sys
-folders = [x for x in json.load(sys.stdin) if x["Name"] == "Omarchy"]
-if len(folders) != 1:
-    sys.exit("Expected exactly one folder named Omarchy at the root of My Drive. Found: " + str(len(folders)))
-print("Found Drive folder: Omarchy")
-'
-mkdir -p "$HOME/GoogleDrive" "$state"
-if mountpoint -q "$HOME/GoogleDrive"; then
-  echo '~/GoogleDrive is a mount. Unmount it before continuing.' >&2
-  exit 1
-fi
-if [[ ! -f "$state/initialized" ]]; then
-  if [[ -n "$(find "$HOME/GoogleDrive" -mindepth 1 ! -path "$HOME/GoogleDrive/RCLONE_TEST" -print -quit)" ]]; then
-    echo '~/GoogleDrive must be empty for the first setup. Move existing files elsewhere first.' >&2
-    exit 1
-  fi
-  "$HOME/.local/bin/omarchy-drive-sync" --initialize
-fi
-systemctl --user daemon-reload
-systemctl --user enable --now omarchy-drive-sync.timer
-echo 'Ready: ~/GoogleDrive syncs with Drive/Omarchy every five minutes while logged in.'
-echo 'Offline edits sync on the next successful run. Deletions sync both ways.'
-echo 'Conflicts keep both versions; replaced/deleted files are retained in backup folders.'
-echo 'Google Docs, Sheets, and Slides are excluded; regular files are downloaded.'
+#!/usr/bin/env python3
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from omarchy_drive.cli import main
+raise SystemExit(main(['setup', *sys.argv[1:]]))

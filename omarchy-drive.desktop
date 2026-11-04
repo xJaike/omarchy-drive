@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Omarchy Drive
+Comment=Standalone Google Drive sync and offline files
+Exec=omarchy-drive watch
+Icon=folder-remote
+Terminal=true
+Categories=Network;FileTransfer;

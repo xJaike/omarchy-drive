@@ -1,9 +1,10 @@
 [Unit]
-Description=Sync Omarchy Google Drive folder every five minutes
+Description=Check Google Drive changes every minute
 
 [Timer]
-OnStartupSec=2min
-OnUnitInactiveSec=5min
+OnStartupSec=1min
+OnUnitInactiveSec=1min
+AccuracySec=10s
 
 [Install]
 WantedBy=timers.target

@@ -7,6 +7,7 @@ import qs.Ui
 BarWidget {
   id: root
   moduleName: "io.github.xjaike.omarchy-drive"
+  property string executable: Quickshell.env("HOME") + "/.local/bin/omarchy-drive"
   property var status: ({kind: "waiting", label: "Drive …", tooltip: "Loading sync status"})
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -17,7 +18,7 @@ BarWidget {
 
   Process {
     id: poll
-    command: ["python3", Qt.resolvedUrl("status.py").toString().replace(/^file:\/\//, "")]
+    command: [root.executable, "status"]
     stdout: StdioCollector {
       onStreamFinished: {
         try { root.status = JSON.parse(this.text) }
@@ -40,16 +41,16 @@ BarWidget {
     bar: root.bar
     text: root.vertical ? "D" : root.status.label
     tooltipText: root.status.tooltip
-    active: root.status.kind === "error"
+    active: ["error", "auth", "blocked", "interrupted"].indexOf(root.status.kind) !== -1
     dimmed: root.status.kind === "paused" || root.status.kind === "setup"
     fontSize: Style.font.caption
     onPressed: function(b) {
       if (b === Qt.LeftButton)
-        Quickshell.execDetached(["omarchy-launch-terminal", "python3", Qt.resolvedUrl("progress.py").toString().replace(/^file:\/\//, "")])
+        Quickshell.execDetached(["omarchy-launch-terminal", root.executable, "watch"])
       else if (b === Qt.MiddleButton)
         Quickshell.execDetached(["systemctl", "--user", "start", "--no-block", "omarchy-drive-sync.service"])
       else if (b === Qt.RightButton)
-        Quickshell.execDetached(["xdg-open", Quickshell.env("HOME") + "/GoogleDrive"])
+        Quickshell.execDetached([root.executable, "open"])
       root.refresh()
     }
   }

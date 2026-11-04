@@ -3,3 +3,9 @@ __pycache__/
 *.jsonl
 *.log
 .DS_Store
+
+# Never commit Google credentials or runtime state.
+client_secret*.json
+tokens.json
+client.json
+*.sqlite3*
