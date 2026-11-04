@@ -826,3 +826,85 @@ class HomeFolderTests(HomeFolderCase):
         del self.drive.files['Documents/report.txt']
         self.engine().sync()
         self.assertEqual([path.name for path in old.iterdir()], ['kept'])
+
+
+class NoOpSelectionTests(HomeFolderCase):
+    """A command that would change nothing must keep the history that stops a later deletion coming back."""
+
+    def state(self):
+        info = self.paths.settings.stat()
+        cache = self.paths.state/'panel-cache.json'
+        return (self.store.baseline(), self.paths.settings.read_bytes(), (info.st_ino, info.st_mtime_ns), cache.read_bytes())
+
+    def assert_changes_nothing(self, command):
+        self.cache(Documents='both')
+        before = self.state()
+        self.assertEqual(command(), {'ok': True})
+        self.assertEqual(self.state(), before)
+
+    def synced(self):
+        (self.documents/'report.txt').write_bytes(b'report')
+        self.enable()
+        self.engine().sync()
+        self.assertEqual(set(self.store.baseline()), {'Documents/report.txt'})
+
+    def test_ticking_a_ticked_folder_changes_nothing(self):
+        self.synced()
+        self.assert_changes_nothing(lambda: select(self.paths, 'Documents', True))
+
+    def test_ticking_a_ticked_folder_lets_a_later_local_delete_reach_drive(self):
+        self.synced()
+        self.enable()
+        (self.documents/'report.txt').unlink()
+        self.engine().sync()
+        self.assertFalse((self.documents/'report.txt').exists())  # It would come back as a download.
+        self.assertNotIn('Documents/report.txt', self.drive.files)
+
+    def test_excluding_an_excluded_path_changes_nothing(self):
+        self.synced()
+        set_excluded(self.paths, 'Documents/x', True)
+        self.store.remember('Documents/x/inner', {'id': 'x', 'hash': 'y'})
+        self.assert_changes_nothing(lambda: set_excluded(self.paths, 'Documents/x', True))
+
+    def test_including_a_path_not_excluded_changes_nothing(self):
+        self.synced()
+        self.assert_changes_nothing(lambda: set_excluded(self.paths, 'Documents/report.txt', False))
+
+    def test_unticking_an_unticked_folder_changes_nothing(self):
+        self.store.remember('Documents/old', {'id': 'x', 'hash': 'y'})
+        self.assert_changes_nothing(lambda: select(self.paths, 'Documents', False))
+
+    def test_no_op_commands_still_refuse_during_a_sync(self):
+        self.synced()
+        with self.paths.lock():
+            for command in (self.enable, lambda: set_excluded(self.paths, 'Documents/report.txt', False),
+                            lambda: select(self.paths, 'Other', False)):
+                with self.assertRaisesRegex(Blocked, 'Another sync'):
+                    command()
+
+    def test_ticking_with_no_identity_still_records_it_and_starts_a_merge(self):
+        self.settings(home_folders={'Documents': {'identity': None}})
+        self.store.remember('Documents/old', {'id': 'x', 'hash': 'y'})
+        self.cache(Documents='both')
+        self.enable()
+        info = self.documents.stat()
+        self.assertEqual(self.paths.configured()['home_folders'], {'Documents': {'identity': [info.st_dev, info.st_ino]}})
+        self.assertEqual(self.store.baseline(), {})
+        self.assertFalse((self.paths.state/'panel-cache.json').exists())
+
+    def test_ticking_a_replaced_folder_still_stops_and_keeps_its_history(self):
+        self.synced()
+        self.documents.rename(self.home/'moved')
+        self.documents.mkdir()
+        self.cache(Documents='both')
+        before = self.state()
+        with self.assertRaisesRegex(Blocked, 'was replaced'):
+            self.enable()
+        self.assertEqual(self.state(), before)
+
+    def test_a_real_change_after_a_no_op_still_clears_history(self):
+        self.synced()
+        self.enable()
+        select(self.paths, 'Documents', False)
+        self.assertEqual(self.store.baseline(), {})
+        self.assertNotIn('Documents', self.paths.configured()['home_folders'])

@@ -85,14 +85,19 @@ def select(paths, name, enabled):
             # Not ticked yet counts as an entry with no identity, so a Drive-only folder can pass;
             # a ticked folder that went missing still fails its own identity check.
             source = validate(name, selected.get(name, {}), paths)
+            # Already ticked with a checked identity: clearing its history would turn a later local delete into a download.
+            if (selected.get(name) or {}).get('identity') is not None:
+                return {'ok': True}
             if source.exists():
                 record_identity(settings, name, source)
             elif listed_only_on_drive(paths, name):
                 selected[name] = {'identity': None}
             else:
                 raise Blocked('Refresh the folder list, then tick this Drive folder again.')
+        elif name not in selected:
+            return {'ok': True}
         else:
-            selected.pop(name, None)
+            del selected[name]
         save_selection(paths, settings, name)
     return {'ok': True}
 
@@ -107,6 +112,8 @@ def set_excluded(paths, path, excluded):
         if not all(isinstance(entry, str) for entry in entries):
             raise Blocked('Your folder settings contain an invalid exclusion. Restore settings.json.')
         entries = set(entries)
+        if (path in entries) == excluded:
+            return {'ok': True}  # Clearing the subtree's history here would lose it for nothing.
         (entries.add if excluded else entries.discard)(path)
         settings['excluded'] = sorted(entries)
         save_selection(paths, settings, path)
