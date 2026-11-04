@@ -5,19 +5,21 @@ dashboard, and an Omarchy bar panel adapted from
 [hominluo/omarchy-google-drive](https://github.com/hominluo/omarchy-google-drive). Its Python engine talks directly
 to the Google Drive API. **No rclone or Insync is required.**
 
-The default sync pair is:
+You choose which home folders sync. Each ticked folder pairs with the folder of
+the same name inside your chosen Drive folder, by default **My Drive/Omarchy**:
 
 ```text
-Your computer:  ~/GoogleDrive
-Google Drive:   My Drive/Omarchy
+Your computer:  ~/Documents
+Google Drive:   My Drive/Omarchy/Documents
 ```
 
 Follow the numbered steps below for a new installation. Installation and Google
-sign-in do not transfer file content. You review a preview before the first sync.
+sign-in do not transfer file content, and nothing syncs until you tick a folder.
+You review a preview before the first sync.
 
 **File deletions sync in both directions after files have been tracked.** Keep
-an independent backup of important files and use only one sync client on this
-local folder. Replaced and removed content is retained in local backups.
+an independent backup of important files and use only one sync client on these
+folders. Replaced and removed content is retained in local backups.
 
 ![Google account backend setup stages](images/setup-overview.png)
 
@@ -40,7 +42,8 @@ For a visual index and the provenance of every image, see [docs/README.md](READM
 - [10. Run your first sync](#10-run-your-first-sync)
 - [11. Enable automatic sync](#11-enable-automatic-sync)
 - [12. Open the panel or terminal dashboard](#12-open-the-panel-or-terminal-dashboard)
-- [Use a different folder](#use-a-different-folder)
+- [Choose what syncs](#choose-what-syncs)
+- [Use a different Drive folder](#use-a-different-drive-folder)
 - [Bar widget controls](#bar-widget-controls)
 - [Daily commands](#daily-commands)
 - [Troubleshooting](#troubleshooting)
@@ -60,7 +63,7 @@ You need:
 - A browser on the same computer for Google sign-in.
 - A Google account with access to My Drive and Google Cloud Console.
 - Enough free disk space for offline files, temporary transfers, and backups.
-- `xdg-open` for opening the local folder from the app.
+- `xdg-open` for opening folders from the app.
 
 Omarchy Quattro is required only for the optional bar widget. Manual sync uses
 Python's standard library; no `pip install` or virtual environment is needed.
@@ -142,14 +145,13 @@ its files. For plugin installations, uninstall helpers before removing the plugi
 4. Make sure exactly one item at the root of My Drive uses that name and that it
    is a folder outside Trash.
 
-Files can already exist in this folder and in `~/GoogleDrive`. First sync merges
-both sides and preserves differing versions as conflict copies.
-
-The app creates `~/GoogleDrive` during successful setup if it does not exist.
-It must be an ordinary local folder, not a symlink or cloud mount.
+Files can already exist in this folder. When you tick a home folder of the same
+name as a folder inside it, the first sync merges both sides and preserves
+differing versions as conflict copies. Loose files directly in this folder stay on
+Drive and do not sync.
 
 For another folder name, an explicit folder ID, or automatic remote-folder
-creation, see [Use a different folder](#use-a-different-folder).
+creation, see [Use a different Drive folder](#use-a-different-drive-folder).
 
 ## 4. Create a Google Cloud project
 
@@ -306,15 +308,9 @@ use `setup --client PATH` instead.
 
 ## 9. Check access and preview your first sync
 
-Open the bar panel and review **Keep on disk**. Its checkboxes select directories
-**inside the configured cloud folder**, by default My Drive/Omarchy. The loose
-files checkbox applies to files directly inside that folder. The app does not
-silently select all of My Drive.
-
-Without an explicit selection, all content in the configured pair is included.
-Unticking retains both copies and stops syncing that item. Re-selecting merges
-existing content. Selection changes wait until an active sync finishes.
-
+Open the bar panel and tick the folders you want in the **Folders** list. See
+[Choose what syncs](#choose-what-syncs). A fresh setup ticks nothing, so a sync
+before this step transfers nothing.
 
 First run a read-only file and access check:
 
@@ -345,7 +341,7 @@ Preview does not upload, overwrite, or remove file content. It can refresh sign-
 and initialize local bookkeeping. It displays large deletion plans for review;
 normal sync still enforces the deletion limits.
 
-Check that the folder pair and proposed transfers match your intentions before
+Check that the folders and proposed transfers match your intentions before
 running sync. A preview is a snapshot: the app scans again when applying changes.
 
 ## 10. Run your first sync
@@ -362,8 +358,8 @@ Wait until it reports:
 Up to date. Applied N changes.
 ```
 
-`N` is the number of changes for your run. Open both `~/GoogleDrive` and
-**My Drive/Omarchy** in the browser to check the result.
+`N` is the number of changes for your run. Open a ticked home folder and its partner
+inside **My Drive/Omarchy** in the browser to check the result.
 
 To confirm convergence, run another preview:
 
@@ -413,7 +409,8 @@ This screenshot contains no personal account information.*
 
 Left-click the Drive bar icon for the native panel. Right-click refreshes status;
 hovering shows current transfers, the waiting queue, and recent file history.
-The panel includes **Sync now**, **Open**, **Drive web**, and the schedule switch.
+The panel includes **Sync now**, **Backups**, **Drive web**, the schedule switch,
+and the **Folders** list.
 **Drive web** opens the configured cloud folder in a browser; it does not mount it.
 
 Recent-file rows show the latest event for each retained file, with upload/download
@@ -443,24 +440,79 @@ terminal and shows status, current transfers, and recent activity.
 | **C** | Show setup instructions |
 | **P** | Pause scheduled sync |
 | **R** | Resume scheduled sync |
-| **O** | Open the local folder |
+| **O** | Open your home folder |
 | **Q** | Close the dashboard |
 
 After an action finishes, press **Enter** to return to the dashboard. The **C**
 key shows instructions; use `setup --client PATH` in a terminal to connect.
 
-## Use a different folder
+## Choose what syncs
 
-Choose folder overrides during the **first** setup. These are alternatives to
-step 8; pick the command that matches your intended pair.
+The panel's **Folders** list has one row for each visible home folder and each
+folder inside your chosen Drive folder.
 
-Use a different root folder in My Drive and a different local folder:
+| Label | Meaning |
+| --- | --- |
+| `Home + Drive` | The folder exists on both sides |
+| `Home only` | Only in your home folder. Ticking it creates the Drive folder on the next sync |
+| `Drive only` | Only on Drive. Once ticked it reads `will create ~/Name`, and the next sync creates that folder |
+
+**Tick a folder** to sync it in place. Its files stay where they are, with no
+symlinks or extra copies, and files added to it later are included. Nothing outside
+what you tick ever syncs. Ticking starts no transfer: the next scheduled sync or
+**Sync now** does the work, so you can run `omarchy-drive preview` first.
+
+**Expand a folder** with its arrow or the Right key to list its contents, and tick
+or untick items to include or exclude them. This also works on a folder that is
+not ticked yet, so you can set exclusions first. Rows beneath an excluded folder
+show as `excluded` and cannot be changed individually. An exclusion is an exact
+path; there are no patterns.
+
+**Untick or exclude** to stop syncing. No file changes on either side and nothing
+is written to Drive. Ticking or including it again merges: identical files are
+remembered, one-sided files are copied, and differing files keep both versions.
+Selection changes wait until an active sync finishes.
+
+Keyboard: Up and Down move through the rows, Right expands, Left collapses, Space
+toggles the tick, and `o` opens the top-level folder under the cursor when it
+exists locally.
+
+Some rows cannot be ticked, and show the reason. Hidden folders are never offered
+from your home folder, and a hidden Drive folder is greyed out. So is a Drive folder
+whose name is already used by a file in your home folder. Google Docs and shortcuts
+are greyed out, because they do not sync. Symlinks, sockets and similar items show
+a warning and can be excluded.
+
+When one path stops a sync, the panel shows the error and **Exclude this**. When
+the problem is a ticked folder itself, such as one that is missing, it shows
+**Untick this** instead. The panel never does either by itself.
+
+When Drive cannot be read, the panel says `Drive could not be read. Showing local
+folders only.` Reading can take a few minutes to give up, and an expanding row
+shows `Loading…` meanwhile.
+
+### Known limits
+
+- Local and Drive names must match, under one Drive parent folder.
+- A renamed excluded path is no longer excluded.
+- A folder cannot be excluded while keeping one file inside it. The alternative
+  is to leave it ticked and exclude everything else, though later additions will
+  sync.
+- A small subfolder moved out of a ticked folder still counts as deleted: Drive
+  copies go to Trash with a local backup, subject to the deletion limit.
+- One problem folder pauses sync for all folders until it is resolved.
+
+## Use a different Drive folder
+
+Choose the Drive folder during the **first** setup. These are alternatives to
+step 8; pick the command that matches your intended folder.
+
+Use a different folder at the root of My Drive:
 
 ```bash
 omarchy-drive setup \
   --client ~/Downloads/omarchy-drive-client.json \
-  --folder Documents \
-  --local "$HOME/DriveDocuments"
+  --folder Documents
 ```
 
 Create the remote folder if it does not already exist:
@@ -484,9 +536,8 @@ An explicit ID also avoids ambiguity when multiple folders have the same name.
 For an unfinished first setup, the same overrides can accompany `setup --continue`.
 
 Once configured, reconnect without overrides. There is no in-place command to
-switch a tracked folder pair; its database is bound to that pair and the local
-root's identity. Do not change `settings.json` to point old sync history at a new
-folder.
+switch to another Drive folder; the sync database is bound to the one you chose.
+Do not change `settings.json` to point old sync history at a new folder.
 
 ## Bar widget controls
 
@@ -542,7 +593,7 @@ Do this only if that legacy widget is installed. Avoid enabling both versions.
 | `omarchy-drive sync` | Apply a sync immediately |
 | `omarchy-drive pause` | Disable scheduled sync |
 | `omarchy-drive resume` | Enable scheduled sync |
-| `omarchy-drive open` | Open the local folder |
+| `omarchy-drive open` | Open your home folder |
 | `omarchy-drive status` | Print JSON status |
 | `omarchy-drive --help` | Show available commands |
 | `omarchy-drive setup --help` | Show setup options |
@@ -642,15 +693,15 @@ systemctl --user status omarchy-drive-sync.service --no-pager
 Do not remove lock files while another process is active. Starting another
 sync does not create a second concurrent transfer.
 
-### Local folder was moved, replaced, or contains unsupported items
+### A home folder was moved, replaced, or contains unsupported items
 
-Restore the original local folder to its configured path. The app checks the
-folder's identity, so recreating an empty directory with the same name is not
-a substitute for restoring it.
+Restore the ticked folder to its original path, or untick it in the panel. The app
+checks the folder's identity, so recreating an empty directory with the same name
+is not a substitute for restoring it. Unticking it and ticking it again merges safely.
 
-Move symlinks, special files, and nested mounts outside the sync folder. Resolve
-file/folder name collisions on either side, then preview again. Do not reset the
-database just to bypass these checks.
+For a symlink, special file, nested mount, or file/folder name collision inside a
+ticked folder, use **Exclude this** in the panel, or move or rename the item. Then
+preview again. Do not reset the database just to bypass these checks.
 
 ### A large deletion plan is blocked
 
@@ -708,8 +759,8 @@ or upload-session URLs. Activity and status can contain personal filenames.
   through file operations, so old empty directories can remain.
 - Native Google Docs, Sheets, Slides, and shortcuts are skipped. A skipped item
   colliding with a local path blocks sync rather than overwriting it.
-- This version targets My Drive. Shared drives and selective-sync filters are
-  not implemented. The legacy root `RCLONE_TEST` marker is ignored.
+- This version targets My Drive. Shared drives and exclusion patterns are not
+  implemented. The legacy root `RCLONE_TEST` marker is ignored.
 - Local hashes and complete remote folder listings run each cycle. Large trees
   can take time to scan even when no files need transferring.
 - Uploads use persisted resumable sessions and pre-generated Drive IDs.
@@ -719,6 +770,7 @@ or upload-session URLs. Activity and status can contain personal filenames.
 - Concurrent editing across applications and devices is not atomic. The app
   checks versions, preserves backups, and stops when it detects conflicting
   activity. Automated tests are not a guarantee of production reliability.
+- See also the [known limits](#known-limits) of ticked folders and exclusions.
 
 ## Backups, credentials, and state
 
@@ -726,23 +778,24 @@ Default locations:
 
 | Location | Contents |
 | --- | --- |
-| `~/GoogleDrive/` | Offline files being synced |
-| `~/.GoogleDrive-omarchy-drive-backups/` | Replaced and removed local/cloud content |
+| `~/.local/state/omarchy-drive-v2/backups/` | Replaced and removed local/cloud content |
+| `~/.GoogleDrive-omarchy-drive-backups/` | Backups made by earlier versions, left where they were |
 | `~/.config/omarchy-drive/client.json` | Saved Desktop OAuth client |
 | `~/.config/omarchy-drive/tokens.json` | Google access and refresh tokens |
-| `~/.config/omarchy-drive/settings.json` | Chosen folder pair and settings |
+| `~/.config/omarchy-drive/settings.json` | Drive folder, ticked folders, exclusions and settings |
 | `~/.local/state/omarchy-drive-v2/sync.sqlite3` | Baseline, pending sessions, and recent activity |
 | `~/.local/state/omarchy-drive-v2/status.json` | Latest recorded status |
 | `~/.local/state/omarchy-drive-v2/install-backups/` | Replaced installation files |
 
 `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, and `XDG_DATA_HOME` override the corresponding
-base directories. For a custom local folder, backups use a hidden sibling named
-`.LOCAL_FOLDER_NAME-omarchy-drive-backups` on the same filesystem.
+base directories. Ticked folders must be on the same filesystem as the state
+directory, because backups move files there. The app never moves or deletes old
+`~/.GoogleDrive-omarchy-drive-backups` folders.
 
-Backups are outside the synced folder and have no automatic retention cleanup.
+Backups are outside your synced folders and have no automatic retention cleanup.
 Before restoring a file, pause scheduled sync and wait for active transfers to
 finish. Copy a backup to a separate recovery folder, inspect it, then restore
-it into the synced folder and preview the resulting changes. A restored file
+it into its synced folder and preview the resulting changes. A restored file
 can upload again on the next sync.
 
 Keep the database and any `-wal`/`-shm` companions together when making a stopped
@@ -789,6 +842,74 @@ omarchy-drive preview
 omarchy-drive sync
 omarchy-drive resume
 ```
+
+### Move from the `~/GoogleDrive` layout
+
+Earlier versions synced one local folder, `~/GoogleDrive`, plus optional home
+folders. The first command or panel read after updating migrates your settings
+once, under the sync lock:
+
+1. If the sync history belongs to a different Drive folder, it stops and changes
+   nothing.
+2. If `~/GoogleDrive` holds anything other than `RCLONE_TEST` or app temporary
+   files, it stops, changes nothing, and names the items. Move them into your home
+   folder and tick them there. This check repeats on each run until the folder is
+   clear.
+3. It saves `settings.json.pre-migration` and `identity.pre-migration` in
+   `~/.config/omarchy-drive/`, then rewrites the settings and the database's identity
+   value.
+
+Home folders you had already selected stay ticked with their sync history, so a
+preview should show no changes for them. `~/GoogleDrive` is left in place and stops
+syncing; the app never moves or deletes it. Old backups stay in
+`~/.GoogleDrive-omarchy-drive-backups/`.
+
+### Undo the migration
+
+Do this only with the previous version of the app. This version migrates again as
+soon as it reads the restored settings, and its bar panel reads them every few
+seconds, so put the previous version back first. Folders you ticked and exclusions
+you added since the migration are forgotten.
+
+1. Make sure no sync is running:
+
+   ```bash
+   systemctl --user disable --now omarchy-drive-sync.timer
+   systemctl --user stop omarchy-drive-sync.service
+   ```
+
+2. Copy the saved settings back:
+
+   ```bash
+   cp ~/.config/omarchy-drive/settings.json.pre-migration ~/.config/omarchy-drive/settings.json
+   ```
+
+3. Set the database's identity value to the exact contents of
+   `identity.pre-migration`. Skip this step if that file does not exist, because then
+   the migration did not change the value.
+
+   ```bash
+   python3 - <<'EOF'
+   from pathlib import Path
+   import sqlite3
+   home = Path.home()
+   identity = (home / '.config/omarchy-drive/identity.pre-migration').read_text()
+   db = sqlite3.connect(home / '.local/state/omarchy-drive-v2/sync.sqlite3')
+   with db:
+       db.execute("UPDATE metadata SET value = ? WHERE key = 'identity'", (identity,))
+   db.close()
+   EOF
+   ```
+
+4. Delete both saved files:
+
+   ```bash
+   rm -f ~/.config/omarchy-drive/settings.json.pre-migration ~/.config/omarchy-drive/identity.pre-migration
+   ```
+
+If you use `XDG_CONFIG_HOME` or `XDG_STATE_HOME`, change these paths to match.
+
+### Move from v1
 
 When moving from v1, complete Google Cloud setup and sign in with a Desktop
 OAuth client. V2 does not import the previous engine's credentials or baseline.
@@ -852,19 +973,3 @@ Drive compatibility must also be checked with your own client and account.
 
 License: [MIT](../LICENSE).
 
-## Select folders already in your home directory
-
-1. Open the Google Drive panel from the bar.
-2. Click **Choose home folders**.
-3. Click a folder to select it. For example, `~/Pictures` maps to
-   `Drive/Omarchy/Pictures` without moving your local files.
-4. Run `omarchy-drive preview` to review the plan, then click **Sync now**, or
-   let the existing automatic schedule run.
-5. Click a selected folder again to stop syncing it. Both copies remain.
-
-Your existing `~/GoogleDrive` selection continues working. Existing cloud
-content with the same folder name is merged, retaining conflicts. A folder
-with that name already in `~/GoogleDrive` prevents linking until you resolve
-that overlap. Hidden folders, symlinks, nested mounts, and other filesystems
-are unsupported. If a selected source folder disappears or is replaced, sync
-stops for review rather than interpreting that as a deletion.

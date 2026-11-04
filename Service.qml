@@ -20,11 +20,10 @@ Item {
   property var currentTransfer: null
   property var recentFiles: []
   property int remainingChanges: 0
-  property string folderPath: ""
   property string cloudFolderName: "Omarchy"
   property string cloudUrl: "https://drive.google.com/drive/my-drive"
-  property int selectedCount: 0
-  property bool rootFiles: true
+  property int tickedCount: 0
+  property string blockedPath: ""
   property double localBytes: 0
   property bool localBytesApprox: false
   property double usedBytes: 0
@@ -35,21 +34,25 @@ Item {
   property string warning: ""
   property string lastError: ""
   property string actionStatus: ""
+  property string controlError: ""
   property var folders: []
-  property var homeFolders: []
-  property double staleBytes: 0
-  property int staleCount: 0
-  property int rootFileCount: 0
-  property double rootFileBytes: 0
-  property double rootLocalBytes: 0
-  property int rootLocalCount: 0
+  property bool driveAvailable: true
   property bool foldersLoading: false
   property string foldersError: ""
   property var pendingFolders: ({})
+  property var treeChildren: ({})
+  property var expandedPaths: ({})
+  property var treeLoading: ({})
+  property var treeErrors: ({})
   property int syncIntervalMin: 1
   property int _desiredTimer: -1
   property bool _foldersLoaded: false
+  property bool _foldersAgain: false
+  property var _treeQueue: []
+  property string _treePath: ""
+  property bool _treeDiscard: false
 
+  readonly property string offlineNote: "Drive could not be read. Showing local folders only."
   readonly property string homePath: Quickshell.env("HOME") || ""
   readonly property int refreshIntervalSec: Math.max(1, Number(settings.refreshIntervalSec || 5))
   readonly property bool busy: controlProcess.running
@@ -88,12 +91,10 @@ Item {
     remainingChanges = Number(value.pending || 0)
     var recent = Array.isArray(value.recent) ? value.recent : []
     if (JSON.stringify(recent) !== JSON.stringify(recentFiles)) recentFiles = recent
-    homeFolders = Array.isArray(value.homeFolders) ? value.homeFolders : []
-    folderPath = value.folderPath || ""
     cloudFolderName = value.cloudFolderName || "Omarchy"
     cloudUrl = value.cloudUrl || "https://drive.google.com/drive/my-drive"
-    selectedCount = Number(value.selectedCount || 0)
-    rootFiles = value.rootFiles !== false
+    tickedCount = Number(value.tickedCount || 0)
+    blockedPath = value.blockedPath || ""
     localBytes = Number(value.localBytes || 0)
     localBytesApprox = value.localBytesApprox === true
     usedBytes = Number(value.usedBytes || 0)
@@ -112,30 +113,106 @@ Item {
     _foldersLoaded = true
     if (value.ok === false) { foldersError = value.lastError || "Could not list Drive folders"; return }
     folders = value.folders
-    staleBytes = value.staleBytes
-    staleCount = Number(value.staleCount || 0)
-    rootFileCount = Number(value.rootFileCount || 0)
-    rootFileBytes = Number(value.rootFileBytes || 0)
-    rootLocalBytes = Number(value.rootLocalBytes || 0)
-    rootLocalCount = Number(value.rootLocalCount || 0)
-    rootFiles = value.rootFiles !== false
+    driveAvailable = value.driveAvailable !== false
     foldersError = ""
-    pendingFolders = ({})
   }
   function isSelected(folder) {
     var pending = pendingFolders[folder.name]
-    return pending === undefined ? folder.selected === true : pending === true
+    return typeof pending === "boolean" ? pending : folder.selected === true
+  }
+  function isChecked(row) {
+    if (!row) return false
+    return Number(row.depth || 0) > 0 ? Model.childChecked(row) : isSelected(row)
   }
   function toggleFolder(folder) {
-    if (!folder || busy || syncing) return
+    if (!folder || busy || syncing || !Model.rowEnabled(folder)) return
     var next = !isSelected(folder)
     var copy = Object.assign({}, pendingFolders)
     copy[folder.name] = next
     pendingFolders = copy
-    runControl(baseArgs("select").concat([(next ? "--add=" : "--remove=") + folder.name]))
+    runControl(baseArgs("select").concat(["--name=" + folder.name, next ? "--enable" : "--disable"]))
   }
-  function setRootFiles(enabled) {
-    if (!busy && !syncing) runControl(baseArgs("select").concat([enabled ? "--root-files" : "--no-root-files"]))
+  function toggleExcluded(row) {
+    if (!row || busy || syncing || !Model.rowEnabled(row)) return
+    runControl(baseArgs(Model.includesOnToggle(row) ? "include" : "exclude").concat(["--path=" + row.path]))
+  }
+  function excludeBlocked() {
+    if (blockedPath === "" || busy || syncing) return
+    if (blockedPath.indexOf("/") === -1) runControl(baseArgs("select").concat(["--name=" + blockedPath, "--disable"]))
+    else runControl(baseArgs("exclude").concat(["--path=" + blockedPath]))
+  }
+  function withEntry(map, key, value) {
+    var copy = Object.assign({}, map)
+    copy[key] = value
+    return copy
+  }
+  function withoutEntry(map, key) {
+    var copy = Object.assign({}, map)
+    delete copy[key]
+    return copy
+  }
+  function toggleExpanded(path) {
+    if (expandedPaths[path] === true) { expandedPaths = withoutEntry(expandedPaths, path); return }
+    expandedPaths = withEntry(expandedPaths, path, true)
+    if (!Array.isArray(treeChildren[path])) requestTree(path)
+  }
+  function requestTree(path) {
+    treeErrors = withoutEntry(treeErrors, path)
+    if (treeLoading[path] === true) return
+    treeLoading = withEntry(treeLoading, path, true)
+    _treeQueue = _treeQueue.concat([path])
+    pumpTree()
+  }
+  function pumpTree() {
+    if (treeProcess.running || _treeQueue.length === 0) return
+    _treePath = _treeQueue[0]
+    _treeQueue = _treeQueue.slice(1)
+    treeProcess.command = baseArgs("tree").concat(["--path=" + _treePath])
+    treeProcess.running = true
+    treeTimeout.restart()
+  }
+  function finishTree(code, out, err) {
+    var value = code === 0 ? Model.parseTree(out) : {ok: false, lastError: String(err || "").trim()}
+    if (value.ok === false) { failTree(_treePath, value.lastError || "This folder could not be read."); return }
+    driveAvailable = value.driveAvailable !== false
+    treeChildren = withEntry(treeChildren, _treePath, value.rows)
+    treeLoading = withoutEntry(treeLoading, _treePath)
+  }
+  function failTree(path, message) {
+    treeErrors = withEntry(treeErrors, path, message)
+    treeLoading = withoutEntry(treeLoading, path)
+    // Closed again, so that expanding it retries.
+    expandedPaths = withoutEntry(expandedPaths, path)
+  }
+  function treeTimedOut() {
+    failTree(_treePath, offlineNote)
+    _treeDiscard = true
+    treeProcess.running = false
+  }
+  function resetTree() {
+    _treeQueue = []
+    treeChildren = ({})
+    expandedPaths = ({})
+    treeLoading = ({})
+    treeErrors = ({})
+    if (treeProcess.running) {
+      _treeDiscard = true
+      treeTimeout.stop()
+      treeProcess.running = false
+    }
+  }
+  function rowNote(path) {
+    if (treeLoading[path] === true) return "Loading…"
+    if (typeof treeErrors[path] === "string") return treeErrors[path]
+    var children = treeChildren[path]
+    return expandedPaths[path] === true && Array.isArray(children) && children.length === 0 ? "Empty" : ""
+  }
+  function rowCaption(row) {
+    if (!row) return ""
+    return [Model.rowLabel(row, isChecked(row)), rowNote(row.path)].filter(Boolean).join(" · ")
+  }
+  function rowWarns(row) {
+    return !!row && (typeof treeErrors[row.path] === "string" || Model.rowWarns(row))
   }
   function syncNow() {
     if (!busy && !syncing && installed && authenticated) runControl(baseArgs("sync"))
@@ -146,28 +223,30 @@ Item {
     var interval = Math.max(1, Number(settings.syncIntervalMin || syncIntervalMin))
     runControl(baseArgs("timer").concat([enabled ? "--enable" : "--disable", "--interval", String(interval)]))
   }
-  function selectHomeFolder(name, enabled) {
-    runControl(baseArgs("home-select").concat(["--name", name, enabled ? "--enable" : "--disable"]))
-  }
   function configure() { Quickshell.execDetached(["omarchy-launch-terminal", "python3", configurePath]) }
   function revealFile(path) {
     if (revealProcess.running) return
-    revealProcess.command = baseArgs("reveal").concat(["--path", String(path)])
+    revealProcess.command = baseArgs("reveal").concat(["--path=" + String(path)])
     revealProcess.running = true
   }
-  function openFolder() { if (folderPath) Quickshell.execDetached(["xdg-open", folderPath]) }
+  function openFolder(name) {
+    var row = folders.find(function (folder) { return folder.name === name })
+    if (homePath && row && row.where !== "drive" && !row.error) Quickshell.execDetached(["xdg-open", homePath + "/" + name])
+  }
   function openBrowse() { Quickshell.execDetached(["xdg-open", cloudUrl]) }
   function toggleBrowse() { openBrowse() }
   function openBackups() { Quickshell.execDetached(baseArgs("open-backups")) }
   function runControl(command) {
     if (busy) return
     actionStatus = "Applying change…"
+    controlError = ""
     controlProcess.command = command
     controlProcess.running = true
   }
 
   Timer { interval: root.syncing ? 1000 : root.refreshIntervalSec * 1000; repeat: true; running: true; triggeredOnStart: true; onTriggered: root.refresh() }
   Timer { id: folderTimeout; interval: 240000; onTriggered: { foldersProcess.running = false; root.foldersLoading = false; root.foldersError = "Folder listing timed out" } }
+  Timer { id: treeTimeout; interval: 240000; onTriggered: root.treeTimedOut() }
   Process {
     id: statusProcess
     stdout: StdioCollector { id: statusOut; waitForEnd: true }
@@ -186,7 +265,25 @@ Item {
       root.foldersLoading = false
       if (code === 0) root.applyFolders(foldersOut.text)
       else { root._foldersLoaded = true; root.foldersError = String(foldersErr.text || "Could not list folders") }
+      root.pendingFolders = ({})
+      root.resetTree()
       root.refresh()
+      if (root._foldersAgain) {
+        root._foldersAgain = false
+        Qt.callLater(root.refreshFolders)
+      }
+    }
+  }
+  Process {
+    id: treeProcess
+    stdout: StdioCollector { id: treeOut; waitForEnd: true }
+    stderr: StdioCollector { id: treeErr; waitForEnd: true }
+    onRunningChanged: if (!treeProcess.running) Qt.callLater(root.pumpTree)
+    onExited: function(code) {
+      treeTimeout.stop()
+      var discard = root._treeDiscard
+      root._treeDiscard = false
+      if (!discard) root.finishTree(code, treeOut.text, treeErr.text)
     }
   }
   Process {
@@ -204,12 +301,16 @@ Item {
     stderr: StdioCollector { id: controlErr; waitForEnd: true }
     onExited: function(code) {
       root._desiredTimer = -1
-      root.pendingFolders = ({})
-      root.lastError = code === 0 ? "" : String(controlErr.text || "The Drive command failed")
+      // On success the tick stays as shown until the folder list has caught up.
+      if (code !== 0) root.pendingFolders = ({})
+      root.controlError = code === 0 ? "" : String(controlErr.text || "The Drive command failed").trim()
       root.actionStatus = code === 0 ? "Updated" : ""
       clearNote.restart()
+      root.resetTree()
       root.refresh()
-      root.refreshFolders()
+      // A read already under way started before this change, so read again after it.
+      if (foldersProcess.running) root._foldersAgain = true
+      else root.refreshFolders()
     }
   }
   Timer { id: clearNote; interval: 2500; onTriggered: root.actionStatus = "" }

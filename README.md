@@ -64,8 +64,8 @@ syncing. This fork has its own plugin ID: `io.github.xjaike.google-drive`.
 ## Google account setup
 
 Use your own **Desktop OAuth client**, created in a Google Cloud project you
-control. Existing standalone-backend users keep their saved connection, folder
-pair and sync history; credentials from other sync clients are not imported.
+control. Existing standalone-backend users keep their saved connection, Drive
+folder and sync history; credentials from other sync clients are not imported.
 
 | Stage | Procedure | Visual guide |
 | --- | --- | --- |
@@ -85,8 +85,8 @@ chmod 600 ~/Downloads/omarchy-drive-client.json
 ~/.local/bin/omarchy-drive preview
 ```
 
-Before applying the preview, choose folders in the panel. First setup transfers
-no file content. When the plan looks right, run the first sync:
+Setup selects no folders, so nothing syncs until you tick some in the panel. Tick
+them before applying the preview. When the plan looks right, run the first sync:
 
 ```bash
 ~/.local/bin/omarchy-drive sync
@@ -107,32 +107,42 @@ the Drive API in the client's project, allow activation to take effect, then run
 ```
 
 For an External app left in Testing, refresh tokens can expire after seven days.
-See the full guide for publishing-status considerations, reconnection, custom
-folder pairs and troubleshooting. Publishing is distinct from Google verification.
+See the full guide for publishing-status considerations, reconnection, using a
+different Drive folder and troubleshooting. Publishing is distinct from Google
+verification.
 
 ## Panel controls
 
 | Control | Behavior |
 | --- | --- |
-| Folder checkbox | Include/exclude a top-level directory inside the configured Drive folder |
-| Loose files checkbox | Include/exclude regular files directly inside that folder |
+| Checkbox on a folder / Space | Tick or untick a home folder |
+| Checkbox on an item inside a folder / Space | Exclude or include that file or subfolder |
+| Arrow on a folder / Right, Left | Expand or collapse it |
 | Sync now / `s` | Start one sync through the standalone systemd service |
 | Automatic sync switch / `a` | Enable or pause the timer |
-| Open / `o` | Open the configured local offline folder |
+| `o` | Open the top-level folder under the cursor, when it exists locally |
 | Drive web / `b` | Open the configured cloud folder in your browser |
 | Backups / `c` | Open the local backup directory |
-| `j`, `k`, arrows, Enter, Space | Navigate and toggle folders |
+| `j`, `k`, Up, Down | Move through the list |
 | Escape | Close the panel |
 
-Selection is scoped to the existing backend folder pair, by default
-`~/GoogleDrive` ↔ **My Drive/Omarchy**. It does not silently expand access or start
-syncing the entire My Drive account. The scope is displayed in the panel.
-Existing installations keep their current selection behavior; without an
-explicit selection, all files in that configured pair are included.
+The **Folders** list shows one row for each visible home folder and each folder
+inside the configured Drive folder, labelled `Home + Drive`, `Home only` or
+`Drive only`. A ticked `~/Work` pairs with `Drive/Omarchy/Work`. It does not
+silently expand access or sync the rest of My Drive, and nothing outside what you
+tick ever syncs. Files added later to a ticked folder are included. Ticking a
+`Drive only` row creates the local folder on the next sync.
 
-Deselecting an item stops syncing it and **retains local and cloud copies**.
-Re-selecting merges content rather than applying deletions from an old excluded
-baseline. No cleanup button permanently removes deselected files.
+Unticking a folder or excluding an item stops syncing it and **changes no file on
+either side**. Ticking or including it again merges: identical files are
+remembered, one-sided files are copied, and differing files keep both versions.
+Ticking starts no transfer by itself, and changes wait until an active sync
+finishes.
+
+A problem tied to one path, such as a symlink inside a ticked folder, stops the
+sync and shows **Exclude this**, or **Untick this** when the problem is the ticked
+folder itself. The panel never excludes anything by itself. When Drive cannot be
+read the list shows local folders only, with a note saying so.
 
 The upstream **Browse all** mount is replaced by **Drive web**. This backend has
 no virtual filesystem or on-demand FUSE mount. Native Google Docs/Sheets/Slides
@@ -163,8 +173,10 @@ rechecks and retries the complete sync rather than targeting an individual file.
 - Complete scans, checksum verification, conditional cloud updates, a single
   sync lock, per-file SQLite checkpoints, resumable transfers and bulk-deletion
   limits are handled by the standalone engine.
-- Local backups are outside the sync folder, e.g.
-  `~/.GoogleDrive-omarchy-drive-backups/`. They have no automatic retention cleanup.
+- Local backups are outside your synced folders, in
+  `~/.local/state/omarchy-drive-v2/backups/`. They have no automatic retention
+  cleanup. Backups made by earlier versions stay where they were, in
+  `~/.GoogleDrive-omarchy-drive-backups/`; the app never moves or deletes them.
 - Automatic sync survives panel/shell closure and runs through user services.
 - Preview is read-only for file content. Run it before adopting this client for
   important data and keep an independent backup.
@@ -182,9 +194,9 @@ omarchy bar set io.github.xjaike.google-drive syncIntervalMin 5 --json
 omarchy bar set io.github.xjaike.google-drive refreshIntervalSec 2 --json
 ```
 
-Toggle automatic sync off and on to apply a new sync interval. Folder paths and
-cloud IDs are owned by the backend's initial `setup` command, rather than being
-changed by bar presentation settings. See the full setup guide for custom pairs.
+Toggle automatic sync off and on to apply a new sync interval. The Drive folder
+is chosen by the backend's initial `setup` command, rather than by bar presentation
+settings. See the full setup guide for using a different one.
 
 ## Update
 
@@ -196,6 +208,10 @@ bash ~/.config/omarchy/plugins/io.github.xjaike.google-drive/install.sh
 The installer pauses scheduled sync while replacing helpers. Review with
 `~/.local/bin/omarchy-drive preview`, then re-enable the panel's automatic switch
 when ready. Preserve local Git changes before updating.
+
+Updating from a version that used `~/GoogleDrive` migrates your settings once. If
+that folder still holds files, the app stops, changes nothing, and names what to
+move. See [the migration steps and how to undo them](docs/STANDALONE_SETUP.md#move-from-the-googledrive-layout).
 
 ## Remove
 
@@ -229,25 +245,21 @@ License: [MIT](LICENSE).
 The panel follows Omarchy’s active theme automatically, including popup colors,
 status accents, muted text, and the shell font. Theme changes apply live.
 
-### Sync folders from your home directory
+### Known limits
 
-Open the Drive panel and click **Choose home folders**. Click a folder such as
-`~/Documents` to enable two-way sync with `Drive/Omarchy/Documents`. Its files
-stay in their original location; no symlinks or extra local copies are created.
-The existing `~/GoogleDrive` folder continues syncing alongside these folders.
-The next automatic sync transfers the selected content, or click **Sync now**.
+- Local and Drive names must match, under one Drive parent folder.
+- A renamed excluded path is no longer excluded.
+- A folder cannot be excluded while keeping one file inside it. The alternative
+  is to leave it ticked and exclude everything else, though later additions will
+  sync.
+- A small subfolder moved out of a ticked folder still counts as deleted: Drive
+  copies go to Trash with a local backup, subject to the deletion limit.
+- One problem folder pauses sync for all folders until it is resolved.
 
-Click a selected folder again to stop syncing it. Both local and cloud files
-remain. Selecting it again starts a merge and preserves conflicting versions.
-Existing cloud folders with the same name are merged using the usual conflict
-protection. A same-name folder already inside `~/GoogleDrive` must be resolved
-before linking its home-folder counterpart.
-
-Only visible folders directly inside your home directory are offered. Hidden
+Only visible folders directly inside your home directory can be ticked. Hidden
 folders, the home directory itself, symlinks, and folders on another filesystem
-are excluded. A selected folder that disappears or is replaced blocks syncing
-instead of being treated as deleted content. Unsupported symlinks or special
-files inside a selected folder also block syncing; check **Preview** in the CLI
-after selecting large project trees. Normal two-way deletion rules apply while
-a folder is selected: cloud deletions preserve local backup copies, and local
-deletions move the cloud copy to Trash.
+cannot. A ticked folder that disappears or is replaced stops syncing instead of
+being treated as deleted content. Google Docs, Sheets, Slides and shortcuts do not
+sync and show greyed out. Normal two-way deletion rules apply while a folder is
+ticked: cloud deletions preserve local backup copies, and local deletions move the
+cloud copy to Trash.

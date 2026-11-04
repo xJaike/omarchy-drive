@@ -1,9 +1,6 @@
 // Pure helpers for the Google Drive folder widget. Kept free of QML types so
 // the parsing and formatting can be reasoned about (and tested) on their own.
 
-var FOLDER_GLYPH = "󰉋"
-var SYNCED_GLYPH = "󰉖"
-
 function defaultStatus() {
   return {
     ok: true,
@@ -11,11 +8,10 @@ function defaultStatus() {
     authenticated: false,
     syncing: false,
     statusText: "Unavailable",
-    folderPath: "",
     mountPath: "",
     remoteName: "",
-    selectedCount: 0,
-    rootFiles: true,
+    tickedCount: 0,
+    blockedPath: "",
     localBytes: 0,
     usedBytes: 0,
     quotaBytes: 0,
@@ -53,10 +49,17 @@ function parseStatus(raw) {
 
 function parseFolders(raw) {
   var parsed = parseJson(raw, function () {
-    return { ok: false, folders: [], staleBytes: 0, rootFiles: true, lastError: "" }
+    return { ok: false, folders: [], lastError: "" }
   }, "Failed to parse the Google Drive folder list")
   parsed.folders = Array.isArray(parsed.folders) ? parsed.folders : []
-  parsed.staleBytes = Number(parsed.staleBytes || 0)
+  return parsed
+}
+
+function parseTree(raw) {
+  var parsed = parseJson(raw, function () {
+    return { ok: false, rows: [], lastError: "" }
+  }, "Failed to parse the folder contents")
+  parsed.rows = Array.isArray(parsed.rows) ? parsed.rows : []
   return parsed
 }
 
@@ -99,43 +102,91 @@ function usageText(usedBytes, quotaBytes, quotaKnown) {
 // One line describing what the folder currently holds.
 function folderSummary(status) {
   if (!status) return ""
-  var count = Number(status.selectedCount || 0)
+  var count = Number(status.tickedCount || 0)
   var parts = []
   parts.push(count === 0 ? "No folders" : (count === 1 ? "1 folder" : count + " folders"))
-  if (status.rootFiles) parts.push("root files")
   parts.push((status.localBytesApprox ? "≈ " : "") + formatBytes(status.localBytes) + " on disk")
   return parts.join(" · ")
 }
 
-function folderMeta(folder) {
-  if (!folder) return ""
-  var bytes = (folder.approx ? "≈ " : "") + formatBytes(folder.localBytes)
-  if (folder.missing) return "Not in Drive · " + bytes + " on disk"
-  if (folder.stale) return "No longer syncing · " + bytes
-  if (folder.selected) return folder.onDisk ? bytes + " on disk" : "Waiting for first sync"
-  return "Not synced"
+// The list as shown: each expanded row is followed by its loaded children.
+function flattenRows(folders, childrenByPath, expanded) {
+  var rows = []
+  function visit(row, path, depth) {
+    rows.push(Object.assign({}, row, {path: path, depth: depth}))
+    // Exact checks, because a folder can be named after an Object.prototype member.
+    if (expanded[path] !== true || !Array.isArray(childrenByPath[path])) return
+    childrenByPath[path].forEach(function (child) { visit(child, child.path, depth + 1) })
+  }
+  folders.forEach(function (folder) { visit(folder, folder.name, 0) })
+  return rows
 }
 
-function folderGlyph(folder) {
-  return folder && folder.selected ? SYNCED_GLYPH : FOLDER_GLYPH
+function isChild(row) {
+  return Number(row.depth || 0) > 0
 }
 
-// The loose files at the very top of Drive, which belong to no folder.
-function rootFilesMeta(count, bytes, localCount, localBytes) {
-  var n = Number(count || 0)
-  var have = Number(localCount || 0)
-  var onDisk = Number(localBytes || 0)
-  var kept = have > 0 ? " · " + formatBytes(onDisk) + " on disk" : ""
-  if (n <= 0) return have > 0 ? have + (have === 1 ? " file" : " files") + kept : "Files that sit in no folder"
-  return n + (n === 1 ? " file" : " files") + " · " + formatBytes(bytes) + kept
+// tree does not refuse a mount point, so kind alone is not enough to offer expanding.
+function canExpand(row) {
+  if (!row) return false
+  if (!isChild(row)) return !row.error
+  return row.kind === "dir" && !row.unsupported
 }
 
-function shortHomePath(path, home) {
-  var value = String(path || "")
-  var prefix = String(home || "")
-  if (prefix !== "" && value === prefix) return "~"
-  if (prefix !== "" && value.indexOf(prefix + "/") === 0) return "~" + value.substring(prefix.length)
-  return value
+function includesOnToggle(row) {
+  return row.excluded === true && row.inheritedExclusion !== true
+}
+
+function rowEnabled(row) {
+  if (!row) return false
+  if (!isChild(row)) return row.selected === true || !row.error
+  return row.excludable === true || includesOnToggle(row)
+}
+
+// A ticked child is one that syncs, so excluded rows and Google Docs read as unticked.
+function childChecked(row) {
+  return row.excluded !== true && row.excludable === true
+}
+
+function rowWarns(row) {
+  if (!isChild(row)) return row.selected === true && !!row.error
+  return !!row.unsupported && row.excludable === true && row.excluded !== true
+}
+
+function rowLabel(row, checked) {
+  if (!row) return ""
+  if (isChild(row)) {
+    if (row.excluded === true || row.inheritedExclusion === true) return "excluded"
+    return row.unsupported || ""
+  }
+  if (row.error) return row.error
+  if (row.where === "both") return "Home + Drive"
+  if (row.where === "drive") return checked ? "Drive only · will create ~/" + row.name : "Drive only"
+  return "Home only"
+}
+
+function rowSize(row) {
+  if (!row) return ""
+  if (isChild(row)) return row.kind === "file" ? formatBytes(row.size) : ""
+  if (row.where === "drive" || row.error) return ""
+  return (row.approx ? "≈ " : "") + formatBytes(row.localBytes)
+}
+
+// set_excluded refuses a top-level name, so unticking is the only remedy there.
+function blockedAction(path) {
+  return String(path || "").indexOf("/") === -1 ? "Untick this" : "Exclude this"
+}
+
+// The row at path, or its nearest visible ancestor; -1 when neither is listed.
+function indexOfPath(rows, path) {
+  var parts = String(path || "").split("/")
+  while (parts.length > 0) {
+    var wanted = parts.join("/")
+    for (var i = 0; i < rows.length; i++)
+      if (rows[i].path === wanted) return i
+    parts.pop()
+  }
+  return -1
 }
 
 if (typeof module !== "undefined") {
@@ -143,14 +194,21 @@ if (typeof module !== "undefined") {
     defaultStatus: defaultStatus,
     parseStatus: parseStatus,
     parseFolders: parseFolders,
+    parseTree: parseTree,
     formatBytes: formatBytes,
     relativeTime: relativeTime,
     usageText: usageText,
     folderSummary: folderSummary,
-    folderMeta: folderMeta,
-    folderGlyph: folderGlyph,
-    rootFilesMeta: rootFilesMeta,
-    shortHomePath: shortHomePath
+    flattenRows: flattenRows,
+    canExpand: canExpand,
+    includesOnToggle: includesOnToggle,
+    rowEnabled: rowEnabled,
+    childChecked: childChecked,
+    rowWarns: rowWarns,
+    rowLabel: rowLabel,
+    rowSize: rowSize,
+    blockedAction: blockedAction,
+    indexOfPath: indexOfPath
   }
 }
 

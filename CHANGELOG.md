@@ -1,5 +1,56 @@
 # Standalone backend fork
 
+## Unreleased: optional folders
+
+`~/GoogleDrive` is no longer special. You choose which home folders sync, and can
+exclude any file or subfolder inside them. A fresh setup syncs nothing until
+something is ticked.
+
+- One **Folders** list replaces the "Choose home folders" picker and "Keep on
+  disk". Rows expand in place, and a ticked `~/X` pairs with `Drive/<parent>/X`.
+- Exclude exact paths inside a folder, including one that is not ticked yet.
+  Unticking or excluding changes no file on either side and sends no Drive write.
+  Ticking or including again merges, and ticking starts no transfer.
+- A problem tied to one path offers **Exclude this**, or **Untick this** for a
+  ticked folder. The panel never does either by itself.
+- Removed: `setup --local`, the `~/GoogleDrive` default, the loose-files setting,
+  the panel's Open button, the "remains on disk" note, and the "Folder" row. Loose
+  files directly in the Drive parent folder stay on Drive.
+- The Backups button is always shown while connected. New backups go to
+  `~/.local/state/omarchy-drive-v2/backups/`. Old
+  `~/.GoogleDrive-omarchy-drive-backups` folders stay where they were; the app
+  never moves or deletes them.
+- Settings migrate once. If `~/GoogleDrive` still holds files, the app stops, changes
+  nothing, and names what to move into your home folder. `~/GoogleDrive` itself is
+  left in place.
+
+To undo the migration, put the previous version of the app back first, because this
+version migrates again as soon as it reads the restored settings. Then:
+
+1. Make sure no sync is running:
+   `systemctl --user disable --now omarchy-drive-sync.timer` and
+   `systemctl --user stop omarchy-drive-sync.service`.
+2. In `~/.config/omarchy-drive/`, copy `settings.json.pre-migration` over
+   `settings.json`.
+3. Set the `identity` value in the `metadata` table of
+   `~/.local/state/omarchy-drive-v2/sync.sqlite3` to the exact contents of
+   `identity.pre-migration`. Skip this if that file does not exist.
+
+   ```bash
+   python3 - <<'EOF'
+   from pathlib import Path
+   import sqlite3
+   home = Path.home()
+   identity = (home / '.config/omarchy-drive/identity.pre-migration').read_text()
+   db = sqlite3.connect(home / '.local/state/omarchy-drive-v2/sync.sqlite3')
+   with db:
+       db.execute("UPDATE metadata SET value = ? WHERE key = 'identity'", (identity,))
+   db.close()
+   EOF
+   ```
+
+4. Delete `settings.json.pre-migration` and `identity.pre-migration`.
+
 ## 2.1.0 — 2026-11-04
 
 - Fork the Homin Luo interface under `io.github.xjaike.google-drive`, preserving

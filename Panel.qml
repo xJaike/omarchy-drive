@@ -16,12 +16,12 @@ Panel {
   property var hostWidget: null
   property string focusSection: "folders"
   property int folderIndex: 0
+  property string cursorPath: ""
   property bool cursorActive: false
-  property bool homePickerOpen: false
 
   readonly property var barIdentity: hostWidget || root
-  readonly property var folderRows: drive.folders
-  readonly property bool driveActive: drive.authenticated && (drive.selectedCount > 0 || drive.rootFiles)
+  readonly property var folderRows: Model.flattenRows(drive.folders, drive.treeChildren, drive.expandedPaths)
+  readonly property bool driveActive: drive.authenticated && drive.tickedCount > 0
   readonly property string driveStatus: drive.statusText
   readonly property bool driveSyncing: drive.syncing
   readonly property string driveTooltip: drive.detailsTooltip
@@ -37,7 +37,6 @@ Panel {
   readonly property color barIconColor: drive.authenticated
     ? (drive.lastResult === "error" ? urgent : barForeground)
     : Qt.darker(barForeground, 1.55)
-  readonly property string displayFolder: Model.shortHomePath(drive.folderPath, Quickshell.env("HOME"))
   readonly property string lastSyncText: drive.syncing
     ? "Syncing now"
     : Model.relativeTime(drive.lastFinishedTs)
@@ -67,62 +66,80 @@ Panel {
   }
 
   function ensureCursor() {
-    if (!drive.authenticated) { focusSection = "header"; return }
-    if (root.folderRows.length === 0) {
-      if (focusSection === "folders") focusSection = "root"
+    if (!drive.authenticated || root.folderRows.length === 0) {
+      focusSection = "header"
       folderIndex = 0
       return
     }
-    if (folderIndex >= root.folderRows.length) folderIndex = root.folderRows.length - 1
-    if (folderIndex < 0) folderIndex = 0
+    // Rows close under the cursor, so it follows its path to the nearest row still listed.
+    var index = Model.indexOfPath(root.folderRows, cursorPath)
+    folderIndex = Math.max(0, Math.min(root.folderRows.length - 1, index >= 0 ? index : folderIndex))
+    cursorPath = root.folderRows[folderIndex].path
   }
 
   function moveCursor(dx, dy) {
     cursorActive = true
+    pointerGate.reset()
     ensureCursor()
-    if (dy === 0) return
-    if (focusSection === "header") {
-      if (dy > 0) focusSection = "root"
+    if (focusSection === "folders" && dx !== 0) {
+      stepTree(dx)
       return
     }
-    if (focusSection === "root") {
-      if (dy < 0) {
-        focusSection = "header"
-        if (panelFlick) panelFlick.contentY = 0
-      } else if (root.folderRows.length > 0) {
-        focusSection = "folders"
-        folderIndex = 0
-        scrollCursorIntoView()
-      }
+    if (dy === 0) return
+    if (focusSection === "header") {
+      if (dy > 0 && root.folderRows.length > 0) setCursorIndex(0)
       return
     }
     if (focusSection === "folders") {
       if (dy < 0 && folderIndex === 0) {
-        focusSection = "root"
+        focusSection = "header"
+        if (panelFlick) panelFlick.contentY = 0
         return
       }
-      folderIndex = Math.max(0, Math.min(root.folderRows.length - 1, folderIndex + dy))
-      scrollCursorIntoView()
+      setCursorIndex(Math.max(0, Math.min(root.folderRows.length - 1, folderIndex + dy)))
     }
+  }
+
+  function stepTree(dx) {
+    var row = cursorRow()
+    if (!row) return
+    var isExpanded = drive.expandedPaths[row.path] === true
+    if (dx > 0 ? !isExpanded && Model.canExpand(row) : isExpanded) drive.toggleExpanded(row.path)
   }
 
   function activateCursor() {
     ensureCursor()
     if (focusSection === "header") drive.setAutoSync(!drive.autoSyncActive)
-    else if (focusSection === "folders") drive.toggleFolder(selectedFolder())
-    else if (focusSection === "root") drive.setRootFiles(!drive.rootFiles)
+    else if (focusSection === "folders") toggleRow(cursorRow())
   }
 
-  function selectedFolder() {
+  function toggleRow(row) {
+    if (!row) return
+    if (Number(row.depth || 0) > 0) drive.toggleExcluded(row)
+    else drive.toggleFolder(row)
+  }
+
+  function openCursorFolder() {
+    if (!cursorActive || focusSection !== "folders") return
+    var row = cursorRow()
+    if (row) drive.openFolder(String(row.path).split("/")[0])
+  }
+
+  function cursorRow() {
     if (root.folderRows.length === 0) return null
     return root.folderRows[Math.max(0, Math.min(folderIndex, root.folderRows.length - 1))]
   }
 
-  function setFolderCursor(index) {
-    cursorActive = true
+  function setCursorIndex(index) {
     focusSection = "folders"
     folderIndex = index
+    cursorPath = root.folderRows[index].path
     scrollCursorIntoView()
+  }
+
+  function setFolderCursor(index) {
+    cursorActive = true
+    setCursorIndex(index)
   }
 
   function scrollItemIntoView(item) {
@@ -148,8 +165,19 @@ Panel {
   }
 
   onFolderIndexChanged: scrollCursorIntoView()
+  onFolderRowsChanged: {
+    pointerGate.reset()
+    ensureCursor()
+    if (cursorActive) Qt.callLater(root.scrollCursorIntoView)
+  }
 
   ThemeBridge {}
+
+  // Rows are rebuilt under a resting pointer, which must not move the keyboard cursor.
+  PointerMoveGate {
+    id: pointerGate
+    referenceItem: panelFlick
+  }
 
   Service {
     id: drive
@@ -158,7 +186,6 @@ Panel {
 
   Connections {
     target: drive
-    function onFoldersChanged() { root.ensureCursor() }
     function onAuthenticatedChanged() { root.ensureCursor() }
   }
 
@@ -188,7 +215,7 @@ Panel {
         if (key === "s") drive.syncNow(false)
         else if (key === "a") drive.setAutoSync(!drive.autoSyncActive)
         else if (key === "b") drive.toggleBrowse()
-        else if (key === "o") drive.openFolder()
+        else if (key === "o") root.openCursorFolder()
         else if (key === "r") root.refresh()
         else if (key === "c") drive.openBackups()
       }
@@ -225,7 +252,7 @@ Panel {
                 spacing: 3
                 Text { text: "Google Drive"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: 14; font.weight: Font.DemiBold }
                 Text {
-                  text: drive.authenticated ? Model.folderSummary({selectedCount: drive.selectedCount, rootFiles: drive.rootFiles, localBytes: drive.localBytes, localBytesApprox: drive.localBytesApprox}) : "Not connected"
+                  text: drive.authenticated ? Model.folderSummary({tickedCount: drive.tickedCount, localBytes: drive.localBytes, localBytesApprox: drive.localBytesApprox}) : "Not connected"
                   color: root.dim; font.family: root.fontFamily; font.pixelSize: 10
                   Layout.fillWidth: true; elide: Text.ElideRight
                 }
@@ -251,13 +278,27 @@ Panel {
             visible: text !== ""
             width: parent.width
             text: drive.actionStatus !== "" ? drive.actionStatus
-              : (drive.lastError !== "" ? drive.lastError
-                : (drive.foldersError !== "" ? drive.foldersError : drive.warning))
-            color: (drive.lastError !== "" || drive.foldersError !== "") && drive.actionStatus === ""
+              : (drive.controlError !== "" ? drive.controlError
+                : (drive.lastError !== "" ? drive.lastError
+                  : (drive.foldersError !== "" ? drive.foldersError : drive.warning)))
+            color: (drive.controlError !== "" || drive.lastError !== "" || drive.foldersError !== "") && drive.actionStatus === ""
               ? root.urgent : root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
             wrapMode: Text.WordWrap
+          }
+
+          Button {
+            visible: drive.authenticated && drive.blockedPath !== "" && !drive.syncing
+            radius: 3
+            fontSize: 12
+            text: Model.blockedAction(drive.blockedPath)
+            enabled: !drive.busy
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            bordered: true
+            tooltipText: "Stop syncing " + Model.cleanText(drive.blockedPath) + ". No file changes on either side."
+            onClicked: drive.excludeBlocked()
           }
 
           SetupNotice {
@@ -275,7 +316,6 @@ Panel {
               label: "Google storage"
               value: Model.usageText(drive.usedBytes, drive.quotaBytes, drive.quotaKnown)
             }
-            InfoPair { label: "Folder"; value: root.displayFolder }
             InfoPair { label: "Last sync"; value: root.lastSyncText }
           }
 
@@ -310,16 +350,16 @@ Panel {
               iconSize: 14
               horizontalPadding: 8
               verticalPadding: 6
-              text: "Open"
-              iconText: "󰉋"
+              text: "Backups"
+              iconText: "󰩹"
               foreground: root.foreground
               fontFamily: root.fontFamily
-              tooltipText: "Open the synced folder  (o)"
+              tooltipText: "Open local backup copies  (c)"
               bordered: true
               Layout.fillWidth: true
               Layout.preferredWidth: 1
               Layout.minimumWidth: 0
-              onClicked: drive.openFolder()
+              onClicked: drive.openBackups()
             }
 
             Button {
@@ -359,60 +399,6 @@ Panel {
             onInteraction: root.cursorActive = false
           }
 
-          Column {
-            visible: drive.authenticated
-            width: parent.width
-            spacing: 8
-            Button {
-              text: root.homePickerOpen ? "Close home folder picker" : "Choose home folders"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              focusable: true
-              bordered: true
-              radius: 3
-              fontSize: 12
-              onClicked: root.homePickerOpen = !root.homePickerOpen
-            }
-            Text {
-              visible: root.homePickerOpen
-              width: parent.width
-              text: "Sync selected folders in place. ~/Documents ↔ Drive/" + drive.cloudFolderName + "/Documents. Deselecting keeps both copies."
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: 10
-              wrapMode: Text.Wrap
-            }
-            Column {
-              visible: root.homePickerOpen
-              width: parent.width
-              spacing: 3
-              Repeater {
-                model: drive.homeFolders
-                Button {
-                  required property var modelData
-                  width: parent.width
-                  text: (modelData.selected ? "✓  " : "+  ") + "~/" + modelData.name
-                  foreground: modelData.error ? root.urgent : root.foreground
-                  fontFamily: root.fontFamily
-                  fontSize: 12
-                  radius: 3
-                  leftAlign: true
-                  focusable: true
-                  enabled: !drive.busy && !drive.syncing
-                  tooltipText: modelData.error || (modelData.selected ? "Stop syncing; keep local and cloud files" : "Link this folder in place for two-way sync")
-                  onClicked: drive.selectHomeFolder(modelData.name, !modelData.selected)
-                }
-              }
-              Text {
-                visible: drive.homeFolders.length === 0
-                text: "No eligible folders found in your home directory."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: 10
-              }
-            }
-          }
-
           PanelSeparator {
             visible: drive.authenticated
             foreground: root.foreground
@@ -424,7 +410,7 @@ Panel {
             spacing: Style.space(8)
 
             PanelSectionHeader {
-              text: "KEEP ON DISK · " + drive.cloudFolderName.toUpperCase()
+              text: "FOLDERS · " + drive.cloudFolderName.toUpperCase()
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
@@ -433,14 +419,34 @@ Panel {
               textFormat: Text.PlainText
               visible: drive.foldersLoading && root.folderRows.length === 0
               width: parent.width
-              text: "Reading your Drive folders…"
+              text: "Reading your folders…"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
               horizontalAlignment: Text.AlignHCenter
             }
 
-            RootFilesRow { width: parent.width }
+            Text {
+              textFormat: Text.PlainText
+              visible: !drive.driveAvailable
+              width: parent.width
+              text: drive.offlineNote
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              visible: !drive.foldersLoading && drive.foldersError === "" && root.folderRows.length === 0
+              width: parent.width
+              text: "No folders found in your home folder or Drive."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
 
             Column {
               id: folderColumn
@@ -453,42 +459,9 @@ Panel {
                   required property var modelData
                   required property int index
                   width: folderColumn.width
-                  folder: modelData
+                  row: modelData
                   rowIndex: index
                 }
-              }
-            }
-          }
-
-          Column {
-            visible: drive.staleBytes > 0 || drive.staleCount > 0
-            width: parent.width
-            spacing: Style.space(6)
-
-            PanelSeparator { foreground: root.foreground }
-
-            RowLayout {
-              width: parent.width
-              spacing: Style.space(8)
-
-              Text {
-                textFormat: Text.PlainText
-                Layout.fillWidth: true
-                text: Model.formatBytes(drive.staleBytes) + " remains on disk for deselected items. Files are retained; re-select to sync again."
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                wrapMode: Text.WordWrap
-              }
-
-              Button {
-                text: "Backups"
-                iconText: "󰩹"
-                enabled: !drive.busy
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                tooltipText: "Open local backup copies  (c)"
-                onClicked: drive.openBackups()
               }
             }
           }
@@ -529,10 +502,17 @@ Panel {
 
   component FolderRow: CursorSurface {
     id: folderRow
-    property var folder: null
+    property var row: null
     property int rowIndex: 0
-    readonly property bool checked: drive.isSelected(folderRow.folder)
-    readonly property string folderName: folder ? String(folder.name || "Untitled") : "Untitled"
+    readonly property int depth: row ? Number(row.depth || 0) : 0
+    readonly property string rowPath: row ? String(row.path) : ""
+    readonly property string rowName: row ? Model.cleanText(row.name || "Untitled") : "Untitled"
+    readonly property bool checked: drive.isChecked(row)
+    readonly property bool toggleable: Model.rowEnabled(row)
+    readonly property bool expandable: Model.canExpand(row)
+    readonly property bool expanded: drive.expandedPaths[rowPath] === true
+    readonly property string caption: Model.cleanText(drive.rowCaption(row))
+    readonly property string sizeText: Model.rowSize(row)
 
     hasCursor: root.cursorActive && root.focusSection === "folders" && root.folderIndex === rowIndex
     foreground: root.foreground
@@ -541,9 +521,14 @@ Panel {
     MouseArea {
       anchors.fill: parent
       hoverEnabled: true
-      cursorShape: drive.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
-      onEntered: root.setFolderCursor(folderRow.rowIndex)
-      onClicked: drive.toggleFolder(folderRow.folder)
+      cursorShape: folderRow.expandable ? Qt.PointingHandCursor : Qt.ArrowCursor
+      onPositionChanged: function (mouse) {
+        if (pointerGate.moved(folderRow, mouse)) root.setFolderCursor(folderRow.rowIndex)
+      }
+      onClicked: {
+        root.setFolderCursor(folderRow.rowIndex)
+        if (folderRow.expandable) drive.toggleExpanded(folderRow.rowPath)
+      }
     }
 
     RowLayout {
@@ -558,19 +543,31 @@ Panel {
         textFormat: Text.PlainText
         text: folderRow.checked ? "󰄲" : "󰄱"
         color: folderRow.checked ? root.foreground : root.dim
+        opacity: folderRow.toggleable ? 1 : 0.5
         font.family: root.fontFamily
         font.pixelSize: Style.font.icon
         Layout.preferredWidth: Style.space(20)
         Layout.alignment: Qt.AlignVCenter
+
+        // Stays enabled when the row cannot be toggled, so a click here never expands the row instead.
+        MouseArea {
+          anchors.fill: parent
+          cursorShape: folderRow.toggleable && !drive.busy && !drive.syncing ? Qt.PointingHandCursor : Qt.ArrowCursor
+          onClicked: {
+            root.setFolderCursor(folderRow.rowIndex)
+            root.toggleRow(folderRow.row)
+          }
+        }
       }
 
       Text {
         textFormat: Text.PlainText
-        text: Model.folderGlyph({ selected: folderRow.checked })
-        color: folderRow.folder && folderRow.folder.stale ? root.urgent : root.dim
+        text: folderRow.expandable ? (folderRow.expanded ? "▾" : "▸") : ""
+        color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.icon
-        Layout.preferredWidth: Style.space(20)
+        Layout.leftMargin: Style.space(12) * folderRow.depth
+        Layout.preferredWidth: Style.space(12)
         Layout.alignment: Qt.AlignVCenter
       }
 
@@ -582,8 +579,8 @@ Panel {
         Text {
           textFormat: Text.PlainText
           Layout.fillWidth: true
-          text: folderRow.folderName
-          color: root.foreground
+          text: folderRow.rowName
+          color: folderRow.toggleable ? root.foreground : root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
           elide: Text.ElideRight
@@ -591,84 +588,24 @@ Panel {
 
         Text {
           textFormat: Text.PlainText
+          visible: text !== ""
           Layout.fillWidth: true
-          text: Model.folderMeta(folderRow.folder)
-          color: folderRow.folder && folderRow.folder.stale ? root.urgent : root.dim
+          text: folderRow.caption
+          color: drive.rowWarns(folderRow.row) ? root.urgent : root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
+          wrapMode: Text.WordWrap
         }
       }
-    }
-  }
-
-  component RootFilesRow: CursorSurface {
-    id: rootRow
-    hasCursor: root.cursorActive && root.focusSection === "root"
-    foreground: root.foreground
-    implicitHeight: rootContent.implicitHeight + Style.spacing.rowPaddingX
-
-    MouseArea {
-      anchors.fill: parent
-      hoverEnabled: true
-      cursorShape: drive.busy ? Qt.ArrowCursor : Qt.PointingHandCursor
-      onEntered: { root.cursorActive = true; root.focusSection = "root" }
-      onClicked: drive.setRootFiles(!drive.rootFiles)
-    }
-
-    RowLayout {
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.verticalCenter: parent.verticalCenter
-      anchors.leftMargin: Style.space(10)
-      anchors.rightMargin: Style.space(10)
-      spacing: Style.space(8)
 
       Text {
         textFormat: Text.PlainText
-        text: drive.rootFiles ? "󰄲" : "󰄱"
-        color: drive.rootFiles ? root.foreground : root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.icon
-        Layout.preferredWidth: Style.space(20)
-        Layout.alignment: Qt.AlignVCenter
-      }
-
-      Text {
-        textFormat: Text.PlainText
-        text: "󰈔"
+        visible: text !== ""
+        text: folderRow.sizeText
         color: root.dim
         font.family: root.fontFamily
-        font.pixelSize: Style.font.icon
-        Layout.preferredWidth: Style.space(20)
+        font.pixelSize: Style.font.caption
         Layout.alignment: Qt.AlignVCenter
-      }
-
-      ColumnLayout {
-        id: rootContent
-        Layout.fillWidth: true
-        spacing: Style.space(1)
-
-        Text {
-          textFormat: Text.PlainText
-          Layout.fillWidth: true
-          text: "Loose files in " + drive.cloudFolderName
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
-          elide: Text.ElideRight
-        }
-
-        Text {
-          textFormat: Text.PlainText
-          Layout.fillWidth: true
-          text: Model.rootFilesMeta(drive.rootFileCount, drive.rootFileBytes,
-                                    drive.rootLocalCount, drive.rootLocalBytes)
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
-        }
       }
     }
   }
