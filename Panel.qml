@@ -280,10 +280,8 @@ Panel {
             textFormat: Text.PlainText
             visible: text !== ""
             width: parent.width
-            text: drive.actionStatus !== "" ? drive.actionStatus
-              : (drive.controlError !== "" ? drive.controlError
-                : (drive.lastError !== "" ? drive.lastError
-                  : (drive.foldersError !== "" ? drive.foldersError : drive.warning)))
+            text: Model.panelNotice({actionStatus: drive.actionStatus, controlError: drive.controlError, lastError: drive.lastError,
+                                     foldersError: drive.foldersError, warning: drive.warning})
             color: (drive.controlError !== "" || drive.lastError !== "" || drive.foldersError !== "") && drive.actionStatus === ""
               ? root.urgent : root.dim
             font.family: root.fontFamily
@@ -512,6 +510,7 @@ Panel {
     readonly property string rowName: row ? Model.cleanText(row.name || "Untitled") : "Untitled"
     readonly property bool checked: drive.isChecked(row)
     readonly property bool toggleable: Model.rowEnabled(row)
+    readonly property bool tickable: Model.rowTickable(row, drive.syncing, drive.busy)
     readonly property bool expandable: Model.canExpand(row)
     readonly property bool expanded: drive.expandedPaths[rowPath] === true
     readonly property string caption: Model.cleanText(drive.rowCaption(row))
@@ -546,7 +545,7 @@ Panel {
         textFormat: Text.PlainText
         text: folderRow.checked ? "󰄲" : "󰄱"
         color: folderRow.checked ? root.foreground : root.dim
-        opacity: folderRow.toggleable ? 1 : 0.5
+        opacity: folderRow.tickable ? 1 : 0.5
         font.family: root.fontFamily
         font.pixelSize: Style.font.icon
         Layout.preferredWidth: Style.space(20)
@@ -555,7 +554,7 @@ Panel {
         // Stays enabled when the row cannot be toggled, so a click here never expands the row instead.
         MouseArea {
           anchors.fill: parent
-          cursorShape: folderRow.toggleable && !drive.busy && !drive.syncing ? Qt.PointingHandCursor : Qt.ArrowCursor
+          cursorShape: folderRow.tickable ? Qt.PointingHandCursor : Qt.ArrowCursor
           onClicked: {
             root.setFolderCursor(folderRow.rowIndex)
             root.toggleRow(folderRow.row)

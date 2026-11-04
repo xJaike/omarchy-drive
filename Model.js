@@ -135,6 +135,19 @@ function withExclusion(rows, path, excluded) {
   })
 }
 
+function topName(path) {
+  return String(path).split("/")[0]
+}
+
+// Ticks the backend accepted, so the list keeps them whatever the next read does.
+function withTicks(rows, ticks) {
+  if (Object.keys(ticks).length === 0) return rows
+  return rows.map(function (row) {
+    // Exact check, because a folder can be named after an Object.prototype member.
+    return typeof ticks[row.name] === "boolean" ? Object.assign({}, row, {selected: ticks[row.name]}) : row
+  })
+}
+
 function isChild(row) {
   return Number(row.depth || 0) > 0
 }
@@ -156,9 +169,14 @@ function rowEnabled(row) {
   return row.excludable === true || includesOnToggle(row)
 }
 
-// A ticked child is one that syncs, so excluded rows and Google Docs read as unticked.
-function childChecked(row) {
-  return row.excluded !== true && row.excludable === true
+// Ticking is unavailable while a sync or another command runs. Expanding is decided by canExpand and stays available.
+function rowTickable(row, syncing, busy) {
+  return !syncing && !busy && rowEnabled(row)
+}
+
+// A ticked child is one that syncs, so excluded rows, Google Docs and anything under an unticked folder read as unticked.
+function childChecked(row, folderTicked) {
+  return folderTicked === true && row.excluded !== true && row.excludable === true
 }
 
 function rowWarns(row) {
@@ -183,6 +201,19 @@ function rowSize(row) {
   if (isChild(row)) return row.kind === "file" ? formatBytes(row.size) : ""
   if (row.where === "drive" || row.error) return ""
   return (row.approx ? "≈ " : "") + formatBytes(row.localBytes)
+}
+
+// A folder with no rows cannot be called empty when Drive's half of the listing went unread.
+function emptyNote(driveUnread, offlineNote) {
+  return driveUnread ? offlineNote : "Empty"
+}
+
+// The panel's message line. A command that failed shows beside a sync error and never hides it.
+function panelNotice(notes) {
+  if (notes.actionStatus) return notes.actionStatus
+  var syncError = notes.lastError.trim(), commandError = notes.controlError.trim()
+  if (syncError && commandError && syncError !== commandError) return syncError + "\n" + commandError
+  return syncError || commandError || notes.foldersError || notes.warning
 }
 
 // set_excluded refuses a top-level name, so unticking is the only remedy there.
@@ -215,13 +246,18 @@ if (typeof module !== "undefined") {
     flattenRows: flattenRows,
     openPaths: openPaths,
     withExclusion: withExclusion,
+    withTicks: withTicks,
     canExpand: canExpand,
     includesOnToggle: includesOnToggle,
     rowEnabled: rowEnabled,
+    rowTickable: rowTickable,
     childChecked: childChecked,
+    topName: topName,
     rowWarns: rowWarns,
     rowLabel: rowLabel,
     rowSize: rowSize,
+    emptyNote: emptyNote,
+    panelNotice: panelNotice,
     blockedAction: blockedAction,
     indexOfPath: indexOfPath
   }

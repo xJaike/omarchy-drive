@@ -77,10 +77,54 @@ assert.equal(model.includesOnToggle({excludable: false, excluded: true, inherite
 assert.equal(model.includesOnToggle({excludable: true, excluded: false, inheritedExclusion: false}), false);
 
 // childChecked: ticked means it syncs, so an exclusion or a Doc reads as unticked.
-assert.equal(model.childChecked({excludable: true, excluded: false}), true);
-assert.equal(model.childChecked({excludable: true, excluded: true}), false);
-assert.equal(model.childChecked({excludable: false, excluded: false, inheritedExclusion: true}), false);
-assert.equal(model.childChecked({excludable: false, excluded: false, unsupported: 'Google Docs and shortcuts do not sync'}), false);
+assert.equal(model.childChecked({excludable: true, excluded: false}, true), true);
+assert.equal(model.childChecked({excludable: true, excluded: true}, true), false);
+assert.equal(model.childChecked({excludable: false, excluded: false, inheritedExclusion: true}, true), false);
+assert.equal(model.childChecked({excludable: false, excluded: false, unsupported: 'Google Docs and shortcuts do not sync'}, true), false);
+// childChecked: nothing under an unticked folder syncs, so none of it reads as ticked.
+assert.equal(model.childChecked({excludable: true, excluded: false}, false), false);
+assert.equal(model.childChecked({excludable: true, excluded: false}), false);
+// topName: the ticked folder a row belongs to.
+assert.equal(model.topName('Work/Sub/b'), 'Work');
+assert.equal(model.topName('Work'), 'Work');
+
+// rowTickable: a row that can change, while nothing is running.
+assert.equal(model.rowTickable({depth: 0, selected: false, error: ''}, false, false), true);
+assert.equal(model.rowTickable({depth: 0, selected: false, error: ''}, true, false), false);
+assert.equal(model.rowTickable({depth: 0, selected: false, error: ''}, false, true), false);
+assert.equal(model.rowTickable({depth: 1, excludable: true}, true, false), false);
+assert.equal(model.rowTickable({depth: 1, excludable: true}, false, true), false);
+assert.equal(model.rowTickable({depth: 0, selected: false, error: 'hidden'}, false, false), false);
+assert.equal(model.rowTickable(null, false, false), false);
+// rowTickable: expanding is decided separately and stays available.
+assert.equal(model.canExpand({depth: 0, name: 'Work', error: ''}), true);
+
+// withTicks: ticks the backend accepted, kept in the list whatever the next read does.
+const ticked = [{name: 'Docs', selected: false, where: 'home'}, {name: 'Work', selected: true}, {name: 'constructor', selected: true}];
+assert.deepEqual(model.withTicks(ticked, {Docs: true, Work: false}),
+  [{name: 'Docs', selected: true, where: 'home'}, {name: 'Work', selected: false}, {name: 'constructor', selected: true}]);
+assert.equal(ticked[0].selected, false);
+// withTicks: no accepted tick leaves the same list, so its rows are not rebuilt.
+assert.equal(model.withTicks(ticked, {}), ticked);
+
+// emptyNote: nothing can be called empty when Drive went unread.
+const offlineNote = 'Drive could not be read. Showing local folders only.';
+assert.equal(model.emptyNote(false, offlineNote), 'Empty');
+assert.equal(model.emptyNote(true, offlineNote), offlineNote);
+
+// panelNotice: a command that failed never hides a sync error, and both show.
+const notice = values => model.panelNotice(Object.assign({actionStatus: '', controlError: '', lastError: '', foldersError: '', warning: ''}, values));
+assert.equal(notice({lastError: 'Sync stopped', controlError: 'Command failed'}), 'Sync stopped\nCommand failed');
+assert.equal(notice({lastError: 'Sync stopped'}), 'Sync stopped');
+assert.equal(notice({controlError: 'Command failed'}), 'Command failed');
+// panelNotice: the same problem reaching both is shown once, however each stream ended it.
+assert.equal(notice({lastError: 'Move these out\n', controlError: 'Move these out'}), 'Move these out');
+// panelNotice: a change under way, then the quieter lines.
+assert.equal(notice({actionStatus: 'Applying change…', lastError: 'Sync stopped'}), 'Applying change…');
+assert.equal(notice({lastError: 'Sync stopped', foldersError: 'No list'}), 'Sync stopped');
+assert.equal(notice({foldersError: 'No list', warning: 'Scope'}), 'No list');
+assert.equal(notice({warning: 'Scope'}), 'Scope');
+assert.equal(notice({}), '');
 
 // rowWarns: a ticked row that cannot sync, or an item that would stop a sync; a Doc is only greyed out.
 assert.equal(model.rowWarns({depth: 0, selected: true, error: 'Missing'}), true);

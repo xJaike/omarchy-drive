@@ -44,6 +44,7 @@ Item {
   property var expandedPaths: ({})
   property var treeLoading: ({})
   property var treeErrors: ({})
+  property var treeDriveUnread: ({})
   property int syncIntervalMin: 1
   property int _desiredTimer: -1
   property bool _foldersLoaded: false
@@ -123,10 +124,13 @@ Item {
   }
   function isChecked(row) {
     if (!row) return false
-    return Number(row.depth || 0) > 0 ? Model.childChecked(row) : isSelected(row)
+    if (Number(row.depth || 0) === 0) return isSelected(row)
+    var name = Model.topName(row.path)
+    var top = folders.find(function (folder) { return folder.name === name })
+    return Model.childChecked(row, !!top && isSelected(top))
   }
   function toggleFolder(folder) {
-    if (!folder || busy || syncing || !Model.rowEnabled(folder)) return
+    if (!Model.rowTickable(folder, syncing, busy)) return
     var next = !isSelected(folder)
     var copy = Object.assign({}, pendingFolders)
     copy[folder.name] = next
@@ -134,13 +138,16 @@ Item {
     runSelection(baseArgs("select").concat(["--name=" + folder.name, next ? "--enable" : "--disable"]), ({}))
   }
   function toggleExcluded(row) {
-    if (!row || busy || syncing || !Model.rowEnabled(row)) return
+    if (!Model.rowTickable(row, syncing, busy)) return
     var including = Model.includesOnToggle(row)
     runSelection(baseArgs(including ? "include" : "exclude").concat(["--path=" + row.path]), {path: row.path, excluded: !including})
   }
   function excludeBlocked() {
     if (blockedPath === "" || busy || syncing) return
-    if (blockedPath.indexOf("/") === -1) runSelection(baseArgs("select").concat(["--name=" + blockedPath, "--disable"]), ({}))
+    if (blockedPath.indexOf("/") === -1) {
+      pendingFolders = withEntry(pendingFolders, blockedPath, false)
+      runSelection(baseArgs("select").concat(["--name=" + blockedPath, "--disable"]), ({}))
+    }
     else runSelection(baseArgs("exclude").concat(["--path=" + blockedPath]), {path: blockedPath, excluded: true})
   }
   function runSelection(command, change) {
@@ -192,6 +199,7 @@ Item {
     var value = code === 0 ? Model.parseTree(out) : {ok: false, lastError: String(err || "").trim()}
     if (value.ok === false) { failTree(_treePath, value.lastError || "This folder could not be read."); return }
     driveAvailable = value.driveAvailable !== false
+    treeDriveUnread = driveAvailable ? withoutEntry(treeDriveUnread, _treePath) : withEntry(treeDriveUnread, _treePath, true)
     // An unchanged reply leaves the list alone, so its rows are not rebuilt.
     if (JSON.stringify(treeChildren[_treePath]) !== JSON.stringify(value.rows)) treeChildren = withEntry(treeChildren, _treePath, value.rows)
     treeLoading = withoutEntry(treeLoading, _treePath)
@@ -232,7 +240,8 @@ Item {
     if (treeLoading[path] === true && !Array.isArray(treeChildren[path])) return "Loading…"
     if (typeof treeErrors[path] === "string") return treeErrors[path]
     var children = treeChildren[path]
-    return expandedPaths[path] === true && Array.isArray(children) && children.length === 0 ? "Empty" : ""
+    if (expandedPaths[path] !== true || !Array.isArray(children) || children.length > 0) return ""
+    return Model.emptyNote(treeDriveUnread[path] === true, offlineNote)
   }
   function rowCaption(row) {
     if (!row) return ""
@@ -299,8 +308,6 @@ Item {
       }
       if (code === 0) root.applyFolders(foldersOut.text)
       else { root._foldersLoaded = true; root.foldersError = String(foldersErr.text || "Could not list folders") }
-      // A selection command still running reads the list again when it exits.
-      if (!root.busy) root.pendingFolders = ({})
     }
   }
   Process {
@@ -332,8 +339,9 @@ Item {
       var change = root._selectionChange
       root._selectionChange = null
       root._desiredTimer = -1
-      // On success the tick stays as shown until the folder list has caught up.
-      if (code !== 0) root.pendingFolders = ({})
+      // Accepted ticks go into the list, so a folder read that then fails cannot show the old state.
+      if (code === 0) root.folders = Model.withTicks(root.folders, root.pendingFolders)
+      root.pendingFolders = ({})
       root.controlError = code === 0 ? "" : String(controlErr.text || "The Drive command failed").trim()
       root.actionStatus = code === 0 ? "Updated" : ""
       clearNote.restart()
@@ -345,4 +353,9 @@ Item {
     }
   }
   Timer { id: clearNote; interval: 2500; onTriggered: root.actionStatus = "" }
+  Timer { id: controlErrorExpiry; interval: 15000; onTriggered: root.controlError = "" }
+  onControlErrorChanged: {
+    if (controlError === "") controlErrorExpiry.stop()
+    else controlErrorExpiry.restart()
+  }
 }
