@@ -110,6 +110,28 @@ class MigrateTests(unittest.TestCase):
         self.assertTrue(migrate(self.paths))
         self.assertEqual(self.identity_backup().read_text(), original)
 
+    def test_identity_original_is_saved_before_the_row_is_rewritten(self):
+        original = self.store.stored_identity()
+        with patch.object(Store, 'replace_identity', side_effect=OSError('disk')):
+            with self.assertRaises(OSError):
+                migrate(self.paths)
+        self.assertEqual(self.identity_backup().read_text(), original)
+        self.assertEqual(self.store.stored_identity(), original)
+        self.assertTrue(migrate(self.paths))
+        self.assertEqual(self.identity_backup().read_text(), original)
+
+    def test_new_form_row_with_existing_identity_backup_keeps_it(self):
+        original = self.store.stored_identity()
+        self.identity_backup().write_text(original)
+        self.set_identity('root', old_format=False)
+        self.assertTrue(migrate(self.paths))
+        self.assertEqual(self.identity_backup().read_text(), original)
+
+    def test_new_form_row_without_identity_backup_creates_none(self):
+        self.set_identity('root', old_format=False)
+        self.assertTrue(migrate(self.paths))
+        self.assertFalse(self.identity_backup().exists())
+
     def test_no_stored_identity_writes_no_identity_backup(self):
         self.store.db.execute("DELETE FROM metadata WHERE key='identity'")
         self.store.db.commit()
