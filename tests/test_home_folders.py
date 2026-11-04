@@ -147,8 +147,64 @@ class HomeFolderTests(HomeFolderCase):
         link = self.home/'.linked-home'
         link.symlink_to(self.home)
         with patch.dict(os.environ, {'HOME': str(link)}):
-            self.assert_folder_problem(lambda: validate('Documents', None, self.paths.state),
+            self.assert_folder_problem(lambda: validate('Documents', None, self.paths),
                                        '~/Documents is not an ordinary folder. Untick it, or restore it as a folder.')
+
+    def paths_at(self, **locations):
+        with patch.dict(os.environ, {key: str(value) for key, value in locations.items()}):
+            paths = Paths()
+        paths.prepare()
+        atomic_json(paths.settings, {'folder_id': 'root'})
+        return paths
+
+    def assert_holds_own_files(self, name, paths):
+        message = f"~/{name} contains Omarchy Drive's own files, so it cannot sync. Choose another folder."
+        before = paths.settings.read_bytes()
+        with self.assertRaises(Blocked) as caught:
+            select(paths, name, True)
+        self.assertEqual(str(caught.exception), message)
+        self.assertIsNone(caught.exception.path)
+        self.assertEqual(paths.settings.read_bytes(), before)
+        row = next(row for row in choices(paths.configured(), paths) if row['name'] == name)
+        self.assertEqual(row['error'], message)
+        # A hand-edited entry must stop too, before anything is read or sent.
+        atomic_json(paths.settings, {'folder_id': 'root', 'home_folders': {name: {}}})
+        store = Store(paths.state)
+        self.addCleanup(store.close)
+        with self.assertRaisesRegex(Blocked, 'own files'):
+            Engine(paths, paths.configured(), store, self.drive).sync()
+        self.assertEqual(self.drive.calls, [])
+
+    def test_folder_holding_the_state_directory_is_refused(self):
+        work = self.home/'Work'
+        work.mkdir()
+        self.assert_holds_own_files('Work', self.paths_at(XDG_STATE_HOME=work/'deep'/'state'))
+
+    def test_folder_holding_the_config_directory_is_refused(self):
+        work = self.home/'Work'
+        work.mkdir()
+        self.assert_holds_own_files('Work', self.paths_at(XDG_CONFIG_HOME=work/'config'))
+
+    def test_state_directory_itself_is_refused(self):
+        paths = self.paths_at(XDG_STATE_HOME=self.home)
+        self.assertEqual(paths.state.parent, self.home)
+        self.assert_holds_own_files(paths.state.name, paths)
+
+    def test_config_directory_itself_is_refused(self):
+        paths = self.paths_at(XDG_CONFIG_HOME=self.home)
+        self.assertEqual(paths.config.parent, self.home)
+        self.assert_holds_own_files(paths.config.name, paths)
+
+    def test_app_directories_reached_through_a_symlink_are_refused(self):
+        work = self.home/'Work'
+        work.mkdir()
+        (self.home/'.linked').symlink_to(work)
+        self.assert_holds_own_files('Work', self.paths_at(XDG_STATE_HOME=self.home/'.linked'/'state'))
+
+    def test_folder_with_a_similar_name_to_the_app_directories_is_allowed(self):
+        (self.home/'Work').mkdir()
+        paths = self.paths_at(XDG_STATE_HOME=self.home/'Work2'/'state', XDG_CONFIG_HOME=self.home/'Work 3')
+        self.assertEqual(validate('Work', None, paths), self.home/'Work')
 
     def test_reserved_marker_name_cannot_be_ticked(self):
         marker = self.home/'RCLONE_TEST'
@@ -715,19 +771,18 @@ class HomeFolderTests(HomeFolderCase):
         self.assertNotIn('home_folders', self.paths.configured())
 
     def test_validate_entry_rules(self):
-        state = self.paths.state
-        self.assertEqual(validate('Documents', None, state), self.documents)
+        self.assertEqual(validate('Documents', None, self.paths), self.documents)
         for entry in (None, {'identity': [1, 2]}):
             with self.subTest(entry=entry), self.assertRaises(Blocked):
-                validate('Missing', entry, state)
+                validate('Missing', entry, self.paths)
         for entry in ({}, {'identity': None}):
             with self.subTest(entry=entry):
-                self.assertEqual(validate('Missing', entry, state), self.home/'Missing')
+                self.assertEqual(validate('Missing', entry, self.paths), self.home/'Missing')
         (self.home/'Broken').symlink_to(self.home/'nowhere')
         (self.home/'file.txt').write_text('x')
         for name in ('Broken', 'file.txt', 'Documents/sub', '.hidden'):
             with self.subTest(name=name), self.assertRaises(Blocked):
-                validate(name, {}, state)
+                validate(name, {}, self.paths)
 
     def test_record_identity_on_a_settings_dict(self):
         settings = {}

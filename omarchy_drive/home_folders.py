@@ -5,7 +5,7 @@ from .selection import IGNORED, folder_name, valid_path
 from .storage import Blocked, Store, atomic_json, read_json
 
 
-def validate(name, entry, state):
+def validate(name, entry, paths):
     """Check ~/name is safe to pair. entry is None when unticked; a ticked entry with no identity may be missing."""
     folder_name(name)
     if name.startswith('.'):
@@ -22,9 +22,12 @@ def validate(name, entry, state):
         raise Blocked(f'~/{name} is missing. Restore it, or untick it to stop syncing.')
     if home.is_symlink() or not drive_only and (source.is_symlink() or not source.is_dir() or source.is_mount()):
         raise Blocked(f'~/{name} is not an ordinary folder. Untick it, or restore it as a folder.')
+    # Syncing the app's own directories would upload its database and backups, and tokens.json with config.
+    if any(own.resolve().is_relative_to(source.resolve()) for own in (paths.state, paths.config)):
+        raise Blocked(f"~/{name} contains Omarchy Drive's own files, so it cannot sync. Choose another folder.")
     info = (home if drive_only else source).stat()
     # archive_source moves originals into the backup directory with os.rename.
-    if info.st_dev != Path(state).stat().st_dev:
+    if info.st_dev != paths.state.stat().st_dev:
         raise Blocked('Home folders must be on the same disk as the app state folder, because backups move files there.')
     if identity is not None and [info.st_dev, info.st_ino] != identity:
         raise Blocked(f'~/{name} was replaced. Untick it and tick it again to merge safely.')
@@ -32,7 +35,7 @@ def validate(name, entry, state):
 
 
 def mappings(settings, paths):
-    return {name: validate(name, entry, paths.state) for name, entry in settings.get('home_folders', {}).items()}
+    return {name: validate(name, entry, paths) for name, entry in settings.get('home_folders', {}).items()}
 
 
 def choices(settings, paths):
@@ -45,7 +48,7 @@ def choices(settings, paths):
     for name in sorted(names, key=str.casefold):
         error = ''
         try:
-            validate(name, selected.get(name), paths.state)
+            validate(name, selected.get(name), paths)
         except (Blocked, OSError) as problem:
             error = str(problem)
         rows.append(dict(name=name, selected=name in selected, error=error))
@@ -81,7 +84,7 @@ def select(paths, name, enabled):
         if enabled:
             # Not ticked yet counts as an entry with no identity, so a Drive-only folder can pass;
             # a ticked folder that went missing still fails its own identity check.
-            source = validate(name, selected.get(name, {}), paths.state)
+            source = validate(name, selected.get(name, {}), paths)
             if source.exists():
                 record_identity(settings, name, source)
             elif listed_only_on_drive(paths, name):
