@@ -7,7 +7,7 @@ import hashlib
 import http.client
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import urllib.parse
 from .http import APIError
 from .storage import Blocked, DriveError, Offline
@@ -19,6 +19,8 @@ UPLOAD_V2 = 'https://www.googleapis.com/upload/drive/v2/'
 FOLDER = 'application/vnd.google-apps.folder'
 FIELDS = 'id,name,mimeType,md5Checksum,size,modifiedTime,version,trashed,parents'
 CHUNK = 8 * 1024 * 1024
+CHANGED_ON_DRIVE = ('This file changed on Drive during sync. Nothing was overwritten or trashed; '
+                    'the next sync will reconcile it.')
 
 
 def digest(path):
@@ -82,7 +84,7 @@ class Drive:
             raise Blocked(f'Drive folder {name} does not exist. Use setup --create-folder to create it.')
         return self.mkdir('root', name, 'root:' + name)['id']
 
-    def scan(self, folder_id, selected=None, root_files=True):
+    def scan(self, folder_id, included=None):
         root = self.get(folder_id)
         if root.get('trashed') or root.get('mimeType') != FOLDER:
             raise Blocked('The configured Google Drive folder is missing or in Trash. Restore it before syncing.')
@@ -90,15 +92,16 @@ class Drive:
         while pending:
             prefix, parent = pending.pop()
             for item in self.children(parent):
-                name = component(item['name'])
-                path = str(PurePosixPath(prefix) / name)
-                if name.startswith('.omarchy-drive-tmp-'):
-                    raise Blocked('A Drive file uses the app temporary-file prefix. Rename it before syncing.')
-                if path in result:
-                    raise Blocked(f'Duplicate Drive names at {path}. Rename the duplicates before syncing.')
-                folder = item['mimeType'] == FOLDER
-                if not prefix and (folder and selected is not None and name not in selected or not folder and not root_files):
+                path = f'{prefix}/{item["name"]}' if prefix else item['name']
+                # Pruned paths are never validated, so problems inside them cannot block a sync.
+                if included is not None and not included(path):
                     continue
+                name = component(item['name'])
+                if name.startswith('.omarchy-drive-tmp-'):
+                    raise Blocked('A Drive file uses the app temporary-file prefix. Rename it before syncing.', path=path)
+                if path in result:
+                    raise Blocked(f'Duplicate Drive names at {path}. Rename the duplicates before syncing.', path=path)
+                folder = item['mimeType'] == FOLDER
                 unsupported = item['mimeType'].startswith('application/vnd.google-apps.') and not folder
                 if not folder and not unsupported and not item.get('md5Checksum'):
                     raise Blocked(f'Drive did not return a checksum for {path}. Sync stopped before changes.')
@@ -218,6 +221,8 @@ class Drive:
                         headers=dict(condition, **{'X-Upload-Content-Type': 'application/octet-stream',
                                                    'X-Upload-Content-Length': str(total)}), expected=(200, 201))
                 except APIError as error:
+                    if error.status == 412:
+                        raise Blocked(CHANGED_ON_DRIVE) from error
                     if error.status != 409 or existing:
                         raise
                     result = self.get(pending['id'])
@@ -269,6 +274,10 @@ class Drive:
                 if result:
                     break
             except APIError as error:
+                if error.status == 412:
+                    pending.pop('session', None)
+                    self.store.save_pending(key, pending)
+                    raise Blocked(CHANGED_ON_DRIVE) from error
                 if error.status in (404, 410):
                     pending.pop('session', None)
                     self.store.save_pending(key, pending)
@@ -296,5 +305,10 @@ class Drive:
 
     def trash(self, expected):
         # Only Drive Trash is used; this app never permanently deletes remote files.
-        self.http.json('PATCH', query_url(API_V2 + 'files/' + encode(expected['id']), fields='id,labels/trashed'),
-                       data={'labels': {'trashed': True}}, headers=self.condition(expected))
+        try:
+            self.http.json('PATCH', query_url(API_V2 + 'files/' + encode(expected['id']), fields='id,labels/trashed'),
+                           data={'labels': {'trashed': True}}, headers=self.condition(expected))
+        except APIError as error:
+            if error.status == 412:
+                raise Blocked(CHANGED_ON_DRIVE) from error
+            raise

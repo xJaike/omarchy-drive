@@ -13,7 +13,7 @@ import urllib.request
 from omarchy_drive.drive import Drive, FOLDER
 from omarchy_drive.engine import Engine
 from omarchy_drive.http import APIError, HTTP
-from omarchy_drive.storage import Paths, Store
+from omarchy_drive.storage import Blocked, Paths, Store
 
 
 class DriveServer(ThreadingHTTPServer):
@@ -222,9 +222,8 @@ class WholeAppIntegrationTests(unittest.TestCase):
         self.engine().sync()
         (self.local / 'cloud.txt').write_bytes(b'edited locally')
         self.race_after_precondition(cloud_id, b'edited in Drive')
-        with self.assertRaises(APIError) as caught:
+        with self.assertRaisesRegex(Blocked, 'changed on Drive'):
             self.engine().sync()
-        self.assertEqual(caught.exception.status, 412)
         self.assertEqual(self.server.content[cloud_id], b'edited in Drive')
 
     def test_drive_edit_racing_a_trash_is_not_trashed(self):
@@ -232,9 +231,8 @@ class WholeAppIntegrationTests(unittest.TestCase):
         self.engine().sync()
         (self.local / 'cloud.txt').unlink()
         self.race_after_precondition(cloud_id, b'edited in Drive')
-        with self.assertRaises(APIError) as caught:
+        with self.assertRaisesRegex(Blocked, 'changed on Drive'):
             self.engine().sync()
-        self.assertEqual(caught.exception.status, 412)
         self.assertFalse(self.server.items[cloud_id]['trashed'])
 
     def test_lost_chunk_response_resumes_saved_server_session(self):

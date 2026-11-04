@@ -8,7 +8,7 @@ from unittest.mock import patch
 import urllib.error
 
 from omarchy_drive.auth import Tokens, authorize, load_client
-from omarchy_drive.drive import Drive, FOLDER
+from omarchy_drive.drive import CHANGED_ON_DRIVE, Drive, FOLDER
 from omarchy_drive.http import HTTP, APIError
 from omarchy_drive.storage import AuthRequired, Blocked, Offline, Paths, Store, atomic_json
 
@@ -203,6 +203,60 @@ class APITests(unittest.TestCase):
             with self.subTest(label), self.assertRaises(Blocked):
                 drive.trash(self.item)
             self.assertEqual(len(self.http.calls), 2)
+
+    def test_scan_skips_unticked_and_excluded_without_listing_them(self):
+        folder = lambda id, name: dict(self.item, id=id, name=name, mimeType=FOLDER, md5Checksum=None)
+        drive = self.adapter([
+            json_response({'mimeType': FOLDER}),
+            json_response({'files': [folder('keep-id', 'keep'), folder('skip-id', 'skip')]}),
+            json_response({'files': [dict(self.item), folder('gone-id', 'gone')]}),
+        ])
+        result = drive.scan('root', lambda p: p.partition('/')[0] == 'keep' and p != 'keep/gone')
+        self.assertEqual(set(result), {'keep', 'keep/a.txt'})
+        self.assertEqual(len(self.http.calls), 3)
+
+    def excluded_problem_listing(self):
+        folder = dict(self.item, id='keep-id', name='keep', mimeType=FOLDER, md5Checksum=None)
+        problems = [dict(self.item, id='d1', name='dup'), dict(self.item, id='d2', name='dup'),
+                    dict(self.item, id='t', name='.omarchy-drive-tmp-x'),
+                    dict(self.item, id='n', name='nosum', md5Checksum=None)]
+        return [json_response({'mimeType': FOLDER}), json_response({'files': [folder]}),
+                json_response({'files': problems})]
+
+    def test_problems_inside_excluded_paths_do_not_block(self):
+        drive = self.adapter(self.excluded_problem_listing())
+        self.assertEqual(set(drive.scan('root', lambda p: p == 'keep')), {'keep'})
+
+    def test_duplicate_blocked_names_the_path(self):
+        drive = self.adapter(self.excluded_problem_listing())
+        with self.assertRaises(Blocked) as caught:
+            drive.scan('root')
+        self.assertEqual(caught.exception.path, 'keep/dup')
+
+    def test_stale_overwrite_and_trash_give_a_readable_block(self):
+        source = self.root / 'source'
+        source.write_bytes(b'abcdef')
+        checksum = self.item['md5Checksum']
+        key = 'upload:root:a.txt:' + checksum
+        session = 'https://www.googleapis.com/upload/drive/v2/files/file-1?uploadType=resumable&upload_id=x'
+        # 412 while creating the resumable session.
+        drive = self.adapter([json_response(self.item), json_response(self.v2_item()), APIError(412)])
+        with self.assertRaises(Blocked) as caught:
+            drive.upload(source, 'root', 'a.txt', checksum, self.item)
+        self.assertEqual(str(caught.exception), CHANGED_ON_DRIVE)
+        # 412 on a saved session: the session is dropped from the pending record.
+        self.store.save_pending(key, {'id': 'file-1', 'session': session, 'expected_version': '2'})
+        drive = self.adapter([APIError(412)])
+        with self.assertRaises(Blocked) as caught:
+            drive.upload(source, 'root', 'a.txt', checksum, self.item)
+        self.assertEqual(str(caught.exception), CHANGED_ON_DRIVE)
+        self.assertNotIn('session', self.store.pending(key))
+        self.assertEqual(self.store.pending(key)['id'], 'file-1')
+        # 412 on trash.
+        drive = self.adapter([json_response(self.item), json_response(self.v2_item()), APIError(412)])
+        with self.assertRaises(Blocked) as caught:
+            drive.trash(self.item)
+        self.assertEqual(str(caught.exception), CHANGED_ON_DRIVE)
 
     def test_completed_upload_with_bad_hash_keeps_pending_record(self):
         source = self.root / 'source'
