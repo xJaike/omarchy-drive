@@ -166,7 +166,7 @@ ticked folders need no re-merge. `~/GoogleDrive` itself is left in place.
   `No folders selected`.
 - `reveal` resolves through `home_folders` only.
 
-### Interface (`Panel.qml`, `Service.qml`)
+### Interface (`Panel.qml`, `Service.qml`, `Model.js`)
 
 - One **Folders** list replaces the "Choose home folders" picker and the
   "Keep on disk" list.
@@ -225,7 +225,8 @@ The fake Drive server keeps observed behaviour: v3 sends no ETag and ignores
 - **Panel:** `tree` rows, offline behaviour and path validation.
 - **Existing tests:** about 25 references to the old settings are updated across
   `test_home_folders`, `test_integration`, `test_activity`, `test_panel`,
-  `test_engine` and `test_recent_files`.
+  `test_engine` and `test_recent_files`. `test_engine` also needs a new harness:
+  its 18 tests sync from a shared root, so their paths gain a home-folder prefix.
 
 ### Real-environment checks
 
