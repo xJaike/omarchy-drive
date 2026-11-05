@@ -180,8 +180,17 @@ function childChecked(row, folderTicked) {
 }
 
 function rowWarns(row) {
-  if (!isChild(row)) return row.selected === true && !!row.error
-  return !!row.unsupported && row.excludable === true && row.excluded !== true
+  return !isChild(row) && row.selected === true && !!row.error
+}
+
+function skippedHeading(count) {
+  if (count <= 0) return ""
+  return count + (count === 1 ? " item" : " items") + " cannot sync"
+}
+
+// status.json carries only the first few; the rest are in the list file.
+function skippedMore(count, shown) {
+  return count > shown ? "+ " + (count - shown) + " more · omarchy-drive skipped" : ""
 }
 
 function rowLabel(row, checked) {
@@ -333,4 +342,5 @@ function wrappedPath(value) {
   lines.push(text)
   return lines.join("\n")
 }
-if (typeof module !== "undefined") Object.assign(module.exports, {transferEta:transferEta, wrappedPath:wrappedPath})
+if (typeof module !== "undefined") Object.assign(module.exports, {transferEta:transferEta, wrappedPath:wrappedPath,
+  skippedHeading:skippedHeading, skippedMore:skippedMore})

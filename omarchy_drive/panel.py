@@ -11,9 +11,9 @@ import time
 from .activity import detail_lines, safe
 from .auth import Tokens
 from .cli import status as backend_status
-from .drive import API, Drive, FOLDER, component, query_url
+from .drive import API, BAD_NAME, Drive, FOLDER, GOOGLE_DOC, query_url, usable_name
 from .http import HTTP
-from .engine import TEMP_PREFIX, local_path
+from .engine import MOUNT, SPECIAL, SYMLINK, TEMP_PREFIX, UNREADABLE, local_path
 from .migrate import migrate
 from . import home_folders
 from .selection import includes, valid_path
@@ -52,14 +52,6 @@ def disk_inventory(root, budget=1):
             if time.monotonic() > deadline:
                 return sizes, counts, True
     return sizes, counts, approximate
-
-
-def usable_name(name):
-    try:
-        component(name)
-    except Blocked:
-        return False
-    return True
 
 
 def drive_folder_error(name, paths):
@@ -142,23 +134,24 @@ def folders(paths, refresh=True):
 def local_details(entry):
     """Describe a directory entry without following it or reading it."""
     if entry.is_symlink():
-        return dict(kind='unsupported', size=0, unsupported='Symbolic links do not sync')
+        return dict(kind='unsupported', size=0, unsupported=SYMLINK)
     if entry.is_dir(follow_symlinks=False):
         if os.path.ismount(entry.path):
-            return dict(kind='unsupported', size=0, unsupported='Nested mounts do not sync')
-        return dict(kind='dir', size=0, unsupported='')
+            return dict(kind='unsupported', size=0, unsupported=MOUNT)
+        return dict(kind='dir', size=0, unsupported='' if os.access(entry.path, os.R_OK | os.X_OK) else UNREADABLE)
     if entry.is_file(follow_symlinks=False):
-        return dict(kind='file', size=entry.stat(follow_symlinks=False).st_size, unsupported='')
-    return dict(kind='unsupported', size=0, unsupported='Sockets, FIFOs and devices do not sync')
+        return dict(kind='file', size=entry.stat(follow_symlinks=False).st_size,
+                    unsupported='' if os.access(entry.path, os.R_OK) else UNREADABLE)
+    return dict(kind='unsupported', size=0, unsupported=SPECIAL)
 
 
 def drive_details(item):
     if not usable_name(item['name']):
-        return dict(kind='unsupported', size=0, unsupported='Rename this on Drive: its name cannot be a local path')
+        return dict(kind='unsupported', size=0, unsupported=BAD_NAME)
     if item['mimeType'] == FOLDER:
         return dict(kind='dir', size=0, unsupported='')
     if item['mimeType'].startswith('application/vnd.google-apps.'):
-        return dict(kind='unsupported', size=0, unsupported='Google Docs and shortcuts do not sync')
+        return dict(kind='unsupported', size=0, unsupported=GOOGLE_DOC)
     return dict(kind='file', size=int(item.get('size', 0)), unsupported='')
 
 
@@ -218,8 +211,8 @@ def tree(paths, path):
         rows.append(dict(details, name=name, path=f'{path}/{name}',
                          where='both' if mine and theirs else 'home' if mine else 'drive',
                          excluded=f'{path}/{name}' in excluded, inheritedExclusion=inherited,
-                         # A Doc only on Drive never syncs, but one clashing with a local file stops sync until excluded.
-                         excludable=not inherited and (mine is not None or not theirs['unsupported'])))
+                         # Sync skips these by itself, so there is nothing to choose.
+                         excludable=not inherited and not details['unsupported']))
     rows.sort(key=lambda row: (row['name'].casefold(), row['name']))
     return dict(ok=True, path=path, driveAvailable=available, rows=rows)
 
@@ -261,6 +254,7 @@ def status(paths):
         lastError=view['message'] if kind in ('blocked','offline','error','auth','interrupted') else '',
         detailsTooltip=view['tooltip'].replace('Left: dashboard · Middle: sync now · Right: open folder', 'Left: panel · Right: refresh').replace('Automatic sync: enabled' if not timer else 'Automatic sync: paused', 'Automatic sync: paused' if not timer else 'Automatic sync: enabled'), activityText='\n'.join(detail_lines(view)),
         current=current, recent=view.get('recent', []), queue=view.get('queue', []), pending=view.get('pending', 0),
+        skipped=view.get('skipped', []), skippedCount=view.get('skippedCount', 0),
         syncIntervalMin=settings.get('sync_interval_min', 1))
 
 

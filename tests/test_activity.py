@@ -172,19 +172,24 @@ class BlockedPathFromCommandTests(unittest.TestCase):
         self.paths.prepare()
         atomic_json(self.paths.settings, {'folder_id': 'root', 'home_folders': {'Work': {}}})
         (self.home/'Work').mkdir()
+        self.drive = MemoryDrive()
+
+    def clash(self):
+        (self.home/'Work'/'clash').write_bytes(b'file')
+        self.drive.files['Work/clash'] = {'id': 'clash', 'kind': 'dir', 'hash': None}
 
     def sync(self):
         def context(paths):
             store = Store(paths.state)
             self.addCleanup(store.close)
-            return paths.configured(), store, MemoryDrive()
+            return paths.configured(), store, self.drive
         with patch('omarchy_drive.cli.context', context), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return main(['sync'])
 
     def test_sync_failure_reaches_status_with_its_path(self):
-        (self.home/'Work'/'link').symlink_to(self.home)
+        self.clash()
         self.assertEqual(self.sync(), 1)
-        self.assertEqual(read_json(self.paths.status)['blockedPath'], 'Work/link')
+        self.assertEqual(read_json(self.paths.status)['blockedPath'], 'Work/clash')
 
     def test_failure_before_the_sync_starts_reaches_status_with_its_path(self):
         with patch('omarchy_drive.cli.migrate', side_effect=Blocked('m', path='Work/a')):
@@ -192,8 +197,65 @@ class BlockedPathFromCommandTests(unittest.TestCase):
         self.assertEqual(read_json(self.paths.status)['blockedPath'], 'Work/a')
 
     def test_next_sync_clears_the_path(self):
-        (self.home/'Work'/'link').symlink_to(self.home)
+        self.clash()
         self.sync()
-        (self.home/'Work'/'link').unlink()
+        (self.home/'Work'/'clash').unlink()
+        del self.drive.files['Work/clash']
         self.assertEqual(self.sync(), 0)
         self.assertIsNone(read_json(self.paths.status).get('blockedPath'))
+
+    def test_skipped_command_prints_the_list(self):
+        (self.home/'Work'/'link').symlink_to(self.home)
+        self.sync()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main(['skipped']), 0)
+        self.assertIn('Work/link — Symbolic', output.getvalue())
+        self.assertIn('1 item cannot sync', output.getvalue())
+
+    def test_skipped_command_says_when_the_list_is_empty(self):
+        self.sync()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main(['skipped']), 0)
+        self.assertIn('Every item could sync', output.getvalue())
+
+    def test_preview_lists_skipped_items_and_writes_no_list_file(self):
+        (self.home/'Work'/'link').symlink_to(self.home)
+        output = io.StringIO()
+        def context(paths):
+            store = Store(paths.state)
+            self.addCleanup(store.close)
+            return paths.configured(), store, self.drive
+        with patch('omarchy_drive.cli.context', context), contextlib.redirect_stdout(output):
+            self.assertEqual(main(['preview']), 0)
+        self.assertIn('Work/link — Symbolic', output.getvalue())
+        self.assertIn('1 item cannot sync', output.getvalue())
+        self.assertFalse((self.paths.state/'cannot-sync.txt').exists())
+
+    def test_blocked_sync_keeps_the_last_list(self):
+        (self.home/'Work'/'link').symlink_to(self.home)
+        self.sync()
+        self.drive.root_exists = False
+        self.assertEqual(self.sync(), 1)
+        self.assertEqual(read_json(self.paths.status)['skippedCount'], 1)
+        self.assertTrue((self.paths.state/'cannot-sync.txt').exists())
+
+    def test_tooltip_does_not_call_a_sync_with_skipped_items_everything(self):
+        (self.home/'Work'/'link').symlink_to(self.home)
+        self.sync()
+        tooltip = status(self.paths)['tooltip']
+        self.assertIn('Up to date · 1 item cannot sync', tooltip)
+        self.assertNotIn('Everything', tooltip)
+
+    def test_doctor_reports_items_that_cannot_sync(self):
+        (self.home/'Work'/'link').symlink_to(self.home)
+        output = io.StringIO()
+        def context(paths):
+            store = Store(paths.state)
+            self.addCleanup(store.close)
+            return paths.configured(), store, self.drive
+        with patch('omarchy_drive.cli.context', context), contextlib.redirect_stdout(output):
+            self.assertEqual(main(['doctor']), 0)
+        self.assertIn('1 item cannot sync', output.getvalue())
+

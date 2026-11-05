@@ -482,12 +482,20 @@ exists locally.
 Some rows cannot be ticked, and show the reason. Hidden folders are never offered
 from your home folder, and a hidden Drive folder is greyed out. So is a Drive folder
 whose name is already used by a file in your home folder. Google Docs and shortcuts
-are greyed out, because they do not sync. Symlinks, sockets and similar items show
-a warning and can be excluded.
+are greyed out, because they do not sync. So are symlinks, sockets, nested mounts
+and unreadable items.
 
-When one path stops a sync, the panel shows the error and **Exclude this**. When
-the problem is a ticked folder itself, such as one that is missing, it shows
-**Untick this** instead. The panel never does either by itself.
+Sync skips those items automatically and carries on with everything else. The panel
+shows `N items cannot sync`, which expands to each item and why, and `omarchy-drive
+skipped` prints the full list from `~/.local/state/omarchy-drive-v2/cannot-sync.txt`.
+A skipped item changes on neither side and is not added to your exclusions. Once it
+can sync, it merges safely on the next run. An unreadable file is not backed up while
+it is skipped.
+
+When a problem a skip cannot settle stops a sync, such as a file and a folder sharing
+a name, the panel shows the error and **Exclude this**. When the problem is a ticked
+folder itself, such as one that is missing, it shows **Untick this** instead. The
+panel never does either by itself.
 
 When Drive cannot be read, the panel says `Drive could not be read. Showing local
 folders only.` Reading can take a few minutes to give up, and an expanding row
@@ -591,7 +599,8 @@ Do this only if that legacy widget is installed. Avoid enabling both versions.
 | `omarchy-drive setup --client PATH` | Sign in or reconnect |
 | `omarchy-drive setup --continue` | Finish setup using saved sign-in |
 | `omarchy-drive doctor` | Check local files and remote access |
-| `omarchy-drive preview` | Show proposed file changes |
+| `omarchy-drive preview` | Show proposed file changes and items that would be skipped |
+| `omarchy-drive skipped` | List the items the last sync could not sync, and why |
 | `omarchy-drive sync` | Apply a sync immediately |
 | `omarchy-drive pause` | Disable scheduled sync |
 | `omarchy-drive resume` | Enable scheduled sync |
@@ -695,7 +704,7 @@ systemctl --user status omarchy-drive-sync.service --no-pager
 Do not remove lock files while another process is active. Starting another
 sync does not create a second concurrent transfer.
 
-### A home folder was moved, replaced, or contains unsupported items
+### A home folder was moved or replaced, or a path stops the sync
 
 Restore the ticked folder to its original path, or untick it in the panel. The app
 checks the folder's identity, so recreating an empty directory with the same name
@@ -704,9 +713,10 @@ is not a substitute for restoring it. Unticking it and ticking it again merges s
 A ticked folder that is gone from Drive stops the same way, with no change on either
 side. Restore it on Drive, or untick it.
 
-For a symlink, special file, nested mount, or file/folder name collision inside a
-ticked folder, use **Exclude this** in the panel, or move or rename the item. Then
-preview again. Do not reset the database just to bypass these checks.
+For a file/folder name collision inside a ticked folder, use **Exclude this** in the
+panel, or rename one side. Then preview again. Do not reset the database just to
+bypass these checks. Symlinks, special files, nested mounts and unreadable items do
+not stop a sync: they are skipped and listed by `omarchy-drive skipped`.
 
 ### A large deletion plan is blocked
 
@@ -762,8 +772,8 @@ or upload-session URLs. Activity and status can contain personal filenames.
   block normal sync pending review.
 - Empty directories are created and retained. Folder moves and renames reconcile
   through file operations, so old empty directories can remain.
-- Native Google Docs, Sheets, Slides, and shortcuts are skipped. A skipped item
-  colliding with a local path blocks sync rather than overwriting it.
+- Native Google Docs, Sheets, Slides, and shortcuts are skipped. One sharing a name
+  with a local path leaves both alone, and is listed by `omarchy-drive skipped`.
 - This version targets My Drive. Shared drives and exclusion patterns are not
   implemented. The legacy root `RCLONE_TEST` marker is ignored.
 - Local hashes and complete remote folder listings run each cycle. Large trees

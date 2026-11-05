@@ -20,6 +20,8 @@ Item {
   property var currentTransfer: null
   property var recentFiles: []
   property int remainingChanges: 0
+  property var skippedFiles: []
+  property int skippedCount: 0
   property string cloudFolderName: "Omarchy"
   property string cloudUrl: "https://drive.google.com/drive/my-drive"
   property int tickedCount: 0
@@ -93,6 +95,9 @@ Item {
     remainingChanges = Number(value.pending || 0)
     var recent = Array.isArray(value.recent) ? value.recent : []
     if (JSON.stringify(recent) !== JSON.stringify(recentFiles)) recentFiles = recent
+    var skipped = Array.isArray(value.skipped) ? value.skipped : []
+    if (JSON.stringify(skipped) !== JSON.stringify(skippedFiles)) skippedFiles = skipped
+    skippedCount = Number(value.skippedCount || 0)
     cloudFolderName = value.cloudFolderName || "Omarchy"
     cloudUrl = value.cloudUrl || "https://drive.google.com/drive/my-drive"
     tickedCount = Number(value.tickedCount || 0)

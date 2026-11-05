@@ -9,13 +9,17 @@ import stat
 import tempfile
 import time
 import uuid
-from .drive import digest
+from .drive import GOOGLE_DOC, digest
 from .activity import Activity
-from .selection import IGNORED, includes
+from .selection import IGNORED, includes, under_any
 from .home_folders import mappings, record_identity
 from .storage import Blocked, atomic_json
 
 TEMP_PREFIX = '.omarchy-drive-tmp-'
+SYMLINK = 'Symbolic links do not sync'
+SPECIAL = 'Sockets, FIFOs and devices do not sync'
+MOUNT = 'Nested mounts do not sync'
+UNREADABLE = 'Could not be read. Check its permissions'
 
 
 def sync_directories(directory, stop):
@@ -47,17 +51,16 @@ def local_path(root, relative):
     return path
 
 
-def scan_local(root, prefix='', included=None):
+def scan_local(root, prefix='', included=None, skipped=None):
+    """List the folder's files. An item that cannot sync goes into skipped, with why, and is left out."""
+    skipped = {} if skipped is None else skipped
     root = Path(root)
     if root.is_symlink() or not root.is_dir() or os.path.ismount(root):
         raise Blocked('The local sync folder must exist as an ordinary local directory. Restore it before syncing.')
     result = {}
-    def unreadable(kind, where, error):
-        raise Blocked(f'A local {kind} could not be read: {where}. Fix its permissions or stop syncing it. '
-                      'No changes were applied.', path=where) from error
     def scan_error(error):
         rest = Path(error.filename).relative_to(root).as_posix()
-        unreadable('folder', prefix.rstrip('/') if rest == '.' else prefix + rest, error)
+        skipped[prefix.rstrip('/') if rest == '.' else prefix + rest] = UNREADABLE
     for directory, folders, files in os.walk(root, followlinks=False, onerror=scan_error):
         for name in list(folders) + files:
             path = Path(directory) / name
@@ -67,22 +70,30 @@ def scan_local(root, prefix='', included=None):
                 if name in folders:
                     folders.remove(name)
                 continue
+            reason = None
             try:
                 info = path.lstat()
-                if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
-                    raise Blocked(f'Unsupported local file type: {relative}. Move it outside the sync folder.', path=relative)
-                if stat.S_ISDIR(info.st_mode):
+                if stat.S_ISLNK(info.st_mode):
+                    reason = SYMLINK
+                elif stat.S_ISDIR(info.st_mode):
                     if os.path.ismount(path):
-                        raise Blocked(f'A nested mount is not supported: {relative}', path=relative)
-                    result[relative] = {'kind': 'dir'}
-                else:
+                        reason = MOUNT
+                    else:
+                        result[relative] = {'kind': 'dir'}
+                elif stat.S_ISREG(info.st_mode):
                     checksum = digest(path)
                     after = path.stat()
                     if (info.st_size, info.st_mtime_ns, info.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
                         raise Blocked(f'A local file changed during scanning: {relative}. Retry sync.')
                     result[relative] = dict(kind='file', hash=checksum, size=info.st_size)
-            except PermissionError as error:
-                unreadable('folder' if name in folders else 'file', relative, error)
+                else:
+                    reason = SPECIAL
+            except PermissionError:
+                reason = UNREADABLE
+            if reason:
+                skipped[relative] = reason
+                if name in folders:
+                    folders.remove(name)
     return result
 
 
@@ -157,6 +168,7 @@ class Engine:
         self.archive_root = paths.backups
         self.run_id = time.strftime('%Y%m%dT%H%M%S') + '-' + uuid.uuid4().hex[:8]
         self.remote, self.local, self.merging = {}, {}, set()
+        self.skipped, self.stale = {}, []
         self.activity = activity or Activity(paths)
         self.drive.progress = self.activity.transfer
 
@@ -182,22 +194,33 @@ class Engine:
         self.merging = {name for name, entry in self.settings.get('home_folders', {}).items()
                         if (entry or {}).get('identity') is None}
         self.local = {}
+        problems, unusable = {}, {}
         for name, source in sources.items():
             if not source.exists():
                 continue  # Drive-only, so plan emits mkdir-local.
             if included(name):
                 self.local[name] = {'kind': 'dir'}
-                self.local.update(scan_local(source, name + '/', included))
+                self.local.update(scan_local(source, name + '/', included, problems))
         # Build complete listings before any local or cloud mutation.
-        self.remote = self.drive.scan(self.settings['folder_id'], included)
+        self.remote = self.drive.scan(self.settings['folder_id'], included, unusable)
         for name in sources:
             item = self.remote.get(name)
             if item and item['kind'] != 'dir':
                 raise Blocked(f'On Drive, {name} is not a folder, so it cannot pair with ~/{name}. '
                               'Untick it, or rename it on Drive.', path=name)
         self.store.identity(self.settings['folder_id'])
-        baseline = {p: item for p, item in self.store.baseline().items()
-                    if included(p) and p.partition('/')[0] not in self.merging}
+        problems.update({path: GOOGLE_DOC for path, item in self.remote.items()
+                         if item['kind'] == 'unsupported' and path in self.local})
+        self.skipped = {**unusable, **problems}
+        # A skipped path sits out on both sides, or its Drive copy would plan as a local deletion. An unusable
+        # Drive name is left out here, because it can look like the path of a real local file.
+        self.local = {p: item for p, item in self.local.items() if not under_any(p, problems)}
+        self.remote = {p: item for p, item in self.remote.items() if not under_any(p, problems)}
+        recorded = self.store.baseline()
+        # Same rule as excluding: once the item can sync again it merges, so nothing is deleted.
+        self.stale = [p for p in recorded if under_any(p, problems)]
+        baseline = {p: item for p, item in recorded.items()
+                    if included(p) and p.partition('/')[0] not in self.merging and not under_any(p, problems)}
         # Otherwise every file would plan as a Drive deletion, and a small folder would pass the deletion limit.
         gone = {p.partition('/')[0] for p in baseline} - self.remote.keys()
         if gone:
@@ -373,6 +396,9 @@ class Engine:
         if not self.activity.started:
             self.activity.start()
         actions = self.snapshot(allow_many_deletes)
+        self.activity.record_skipped(self.skipped)
+        for path in self.stale:
+            self.store.remember(path, None)
         self.save_recorded_identities()
         changed = [a for a in actions if a.kind not in ('remember', 'forget')]
         self.activity.planned(changed)

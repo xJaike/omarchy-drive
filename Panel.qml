@@ -320,6 +320,54 @@ Panel {
             InfoPair { label: "Last sync"; value: root.lastSyncText }
           }
 
+          Column {
+            id: skippedList
+            property bool open: false
+            visible: drive.authenticated && drive.skippedCount > 0
+            width: parent.width
+            spacing: Style.spacing.labelGap
+
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              text: (skippedList.open ? "▾ " : "▸ ") + Model.skippedHeading(drive.skippedCount)
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              elide: Text.ElideRight
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: skippedList.open = !skippedList.open
+              }
+            }
+
+            Repeater {
+              model: skippedList.open ? drive.skippedFiles : []
+              delegate: Text {
+                required property var modelData
+                textFormat: Text.PlainText
+                width: skippedList.width
+                text: Model.cleanText(modelData.path) + " — " + Model.cleanText(modelData.reason)
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                elide: Text.ElideMiddle
+              }
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              visible: skippedList.open && text !== ""
+              width: parent.width
+              text: Model.skippedMore(drive.skippedCount, drive.skippedFiles.length)
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              elide: Text.ElideRight
+            }
+          }
+
           RowLayout {
             visible: drive.authenticated
             width: parent.width

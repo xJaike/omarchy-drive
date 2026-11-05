@@ -8,6 +8,12 @@ def in_subtree(path, root):
     return path == root or path.startswith(root + '/')
 
 
+def under_any(path, roots):
+    """Whether path is one of roots or lies beneath one. Walks the path, so the cost does not grow with roots."""
+    parts = path.split('/')
+    return any('/'.join(parts[:depth]) in roots for depth in range(1, len(parts) + 1))
+
+
 def includes(path, settings):
     if path.partition('/')[0] not in settings.get('home_folders', {}):
         return False

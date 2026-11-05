@@ -11,7 +11,16 @@ something is ticked.
 - Exclude exact paths inside a folder, including one that is not ticked yet.
   Unticking or excluding changes no file on either side and sends no Drive write.
   Ticking or including again merges, and ticking starts no transfer.
-- A problem tied to one path offers **Exclude this**, or **Untick this** for a
+- Items that cannot sync are skipped automatically: symlinks, sockets, FIFOs and
+  devices, nested mounts, unreadable files and folders, a Google Doc or shortcut
+  sharing a name with a local file, and Drive names that cannot be local paths. A
+  skip changes neither side and is not saved as an exclusion. Once the item can sync
+  it merges. A file replaced by a symlink no longer risks its Drive copy going to
+  Trash.
+- The items a sync skipped are listed in the panel, in
+  `~/.local/state/omarchy-drive-v2/cannot-sync.txt`, by `omarchy-drive skipped` and in
+  `omarchy-drive preview`.
+- A problem a skip cannot settle offers **Exclude this**, or **Untick this** for a
   ticked folder. The panel never does either by itself.
 - Removed: `setup --local`, the `~/GoogleDrive` default, the loose-files setting,
   the panel's Open button, the "remains on disk" note, and the "Folder" row. Loose

@@ -20,6 +20,8 @@ UPLOAD_V2 = 'https://www.googleapis.com/upload/drive/v2/'
 FOLDER = 'application/vnd.google-apps.folder'
 FIELDS = 'id,name,mimeType,md5Checksum,size,modifiedTime,version,trashed,parents'
 CHUNK = 8 * 1024 * 1024
+GOOGLE_DOC = 'Google Docs and shortcuts do not sync'
+BAD_NAME = 'Rename this on Drive: its name cannot be a local path'
 CHANGED_ON_DRIVE = ('This file changed on Drive during sync. Nothing was overwritten or trashed; '
                     'the next sync will reconcile it.')
 
@@ -41,6 +43,14 @@ def component(name):
     if not isinstance(name, str) or name in ('', '.', '..') or '/' in name or '\x00' in name:
         raise Blocked('Drive contains a file name that cannot safely be stored locally.')
     return name
+
+
+def usable_name(name):
+    try:
+        component(name)
+    except Blocked:
+        return False
+    return True
 
 
 class Drive:
@@ -85,7 +95,8 @@ class Drive:
             raise Blocked(f'Drive folder {name} does not exist. Use setup --create-folder to create it.')
         return self.mkdir('root', name, 'root:' + name)['id']
 
-    def scan(self, folder_id, included=None):
+    def scan(self, folder_id, included=None, skipped=None):
+        """List the folder. An item inside a folder whose name cannot be a local path goes into skipped."""
         root = self.get(folder_id)
         if root.get('trashed') or root.get('mimeType') != FOLDER:
             raise Blocked('The configured Google Drive folder is missing or in Trash. Restore it before syncing.')
@@ -94,18 +105,16 @@ class Drive:
             prefix, parent = pending.pop()
             for item in self.children(parent):
                 path = f'{prefix}/{item["name"]}' if prefix else item['name']
-                if '/' in item['name']:
-                    # Loose top-level slash names never sync, but inside a folder one would fake a deeper
-                    # path, so it must block instead of being pruned.
-                    if prefix:
-                        raise Blocked(safe(f'A Drive item in {prefix} has a "/" in its name: {item["name"]}. Rename it on Drive before syncing.'))
-                    if included is not None:
-                        continue
+                # Checked before the selection and kept out of the listing, because a "/" would fake a deeper path.
+                # Loose top-level items never sync, so there is nothing to report about them.
+                if not usable_name(item['name']):
+                    if prefix and skipped is not None:
+                        skipped[path] = BAD_NAME
+                    continue
                 # Pruned paths are never validated, so problems inside them cannot block a sync.
                 if included is not None and not included(path):
                     continue
-                name = component(item['name'])
-                if name.startswith('.omarchy-drive-tmp-'):
+                if item['name'].startswith('.omarchy-drive-tmp-'):
                     raise Blocked(safe(f'A Drive file uses the app temporary-file prefix: {path}. Rename it before syncing.'), path=path)
                 if path in result:
                     raise Blocked(f'Duplicate Drive names at {path}. Rename the duplicates before syncing.', path=path)

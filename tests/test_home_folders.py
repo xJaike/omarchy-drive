@@ -259,13 +259,14 @@ class HomeFolderTests(HomeFolderCase):
                     reveal(self.paths, path)
                 run.assert_not_called()
 
-    def test_internal_symlink_blocks_sync_before_upload(self):
+    def test_internal_symlink_is_skipped_and_never_followed(self):
         self.enable()
+        (self.home/'secret.txt').write_text('private')
         (self.documents/'link').symlink_to(self.home)
-        with self.assertRaisesRegex(Blocked, 'Unsupported local file') as caught:
-            self.engine().sync()
-        self.assertEqual(caught.exception.path, 'Documents/link')
-        self.assertEqual(self.drive.calls, [])
+        engine = self.engine()
+        engine.sync()
+        self.assertEqual(list(engine.skipped), ['Documents/link'])
+        self.assertFalse([path for path in self.drive.files if 'secret' in path or 'link' in path])
 
     def test_local_deletion_trashes_only_the_mapped_cloud_file(self):
         (self.documents/'report.txt').write_text('tracked')
@@ -454,33 +455,25 @@ class HomeFolderTests(HomeFolderCase):
         self.assertEqual(self.drive.files['Documents/good.txt']['content'], b'good')
         self.assertFalse([path for path in self.drive.files if 'bad' in path])
         set_excluded(self.paths, 'Documents/bad', False)
-        with self.assertRaises(Blocked) as caught:
-            self.engine().sync()
-        self.assertEqual(caught.exception.path, 'Documents/bad/link')
-
-    def test_problems_blocked_with_their_path_when_included(self):
-        bad = self.documents/'bad'
-        bad.mkdir()
-        os.mkfifo(bad/'pipe')
-        self.enable()
-        with self.assertRaisesRegex(Blocked, 'Documents/bad/pipe') as caught:
-            self.engine().sync()
-        self.assertEqual(caught.exception.path, 'Documents/bad/pipe')
-        self.assertEqual(self.drive.calls, [])
+        engine = self.engine()
+        engine.sync()
+        self.assertEqual(set(engine.skipped), {'Documents/bad/link', 'Documents/bad/pipe', 'Documents/bad/locked'})
 
     @unittest.skipIf(os.geteuid() == 0, 'root can read every folder')
-    def test_unreadable_folder_only_blocks_when_included(self):
+    def test_unreadable_folder_is_listed_only_when_included(self):
         locked = self.documents/'locked'
         locked.mkdir()
         locked.chmod(0)
         self.addCleanup(locked.chmod, 0o700)
         self.enable()
-        with self.assertRaisesRegex(Blocked, 'could not be read') as caught:
-            self.engine().sync()
-        self.assertEqual(caught.exception.path, 'Documents/locked')
-        self.assertEqual(self.drive.calls, [])
+        engine = self.engine()
+        engine.sync()
+        self.assertEqual(list(engine.skipped), ['Documents/locked'])
+        self.assertEqual(self.drive.calls, [('mkdir', 'Documents')])
         set_excluded(self.paths, 'Documents/locked', True)
-        self.engine().sync()
+        engine = self.engine()
+        engine.sync()
+        self.assertEqual(engine.skipped, {})
 
     def test_excluded_content_is_not_hashed(self):
         (self.documents/'skip').mkdir()
@@ -709,7 +702,8 @@ class HomeFolderTests(HomeFolderCase):
 
     def test_blocked_sync_records_no_identity(self):
         self.settings(home_folders={'Documents': {}})
-        (self.documents/'link').symlink_to(self.home)
+        (self.documents/'clash').write_bytes(b'file')
+        self.drive.files['Documents/clash'] = {'id': 'clash', 'kind': 'dir', 'hash': None}
         before = self.paths.settings.read_bytes()
         with self.assertRaises(Blocked):
             self.engine().sync()

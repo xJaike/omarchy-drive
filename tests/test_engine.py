@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from omarchy_drive.drive import FOLDER
-from omarchy_drive.engine import Engine, plan, scan_local
+from omarchy_drive.engine import Engine, UNREADABLE, plan, scan_local
 from omarchy_drive.home_folders import record_identity
 from omarchy_drive.storage import Blocked, Offline, Paths, Store, read_json
 
@@ -26,6 +26,7 @@ class MemoryDrive:
         self.fail_after_upload = False
         self.before_download = None
         self.root_exists = True
+        self.unusable = {}
 
     def put(self, path, data, file_id=None):
         self.serial += 1
@@ -34,9 +35,11 @@ class MemoryDrive:
         self.files[path] = dict(item, content=data)
         return item
 
-    def scan(self, root, included=None):
+    def scan(self, root, included=None, skipped=None):
         if not self.root_exists:
             raise Blocked('Remote root is missing')
+        if skipped is not None:
+            skipped.update(self.unusable)
         return {path: {k: v for k, v in item.items() if k != 'content'} for path, item in self.files.items()
                 if included is None or included(path)}
 
@@ -242,11 +245,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual([call for call in self.drive.calls if call[0] == 'mkdir'],
                          [('mkdir', 'Sync'), ('mkdir', 'Sync/nested'), ('mkdir', 'Sync/nested/deep')])
 
-    def test_symlinks_and_type_conflicts_block_before_transfer(self):
-        (self.local / 'link').symlink_to(self.base / 'outside')
-        with self.assertRaises(Blocked):
-            self.engine().sync()
-        (self.local / 'link').unlink()
+    def test_type_conflicts_block_before_transfer(self):
         self.write('folder', b'file')
         self.drive.files['Sync/folder'] = {'id': 'folder', 'kind': 'dir', 'hash': None}
         with self.assertRaises(Blocked):
@@ -321,9 +320,9 @@ class EngineTests(unittest.TestCase):
         included = lambda path: not path.startswith('Sync/skip') and path != 'Sync/keep/bad'
         result = scan_local(self.local, 'Sync/', included)
         self.assertEqual(set(result), {'Sync/keep', 'Sync/keep/a.txt'})
-        with self.assertRaises(Blocked) as caught:
-            scan_local(self.local, 'Sync/', lambda path: not path.startswith('Sync/skip'))
-        self.assertEqual(caught.exception.path, 'Sync/keep/bad')
+        skipped = {}
+        scan_local(self.local, 'Sync/', lambda path: not path.startswith('Sync/skip'), skipped)
+        self.assertEqual(list(skipped), ['Sync/keep/bad'])
 
     def test_store_identity_is_the_drive_folder_only(self):
         self.engine().snapshot()
@@ -374,53 +373,239 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.settings['home_folders']['Sync'], {'identity': [info.st_dev, info.st_ino]})
         self.assertEqual(read_json(self.paths.settings)['home_folders']['Sync'], {'identity': [info.st_dev, info.st_ino]})
 
+    def run_with_unreadable(self, path, mode=0):
+        target = self.local / path
+        target.chmod(mode)
+        self.addCleanup(target.chmod, 0o700)
+        engine = self.engine()
+        engine.sync()
+        return engine
+
     @unittest.skipIf(os.geteuid() == 0, 'root can read every file')
-    def test_unreadable_folder_is_named_with_its_home_folder_prefix(self):
+    def test_unreadable_folder_is_skipped_and_the_rest_syncs(self):
         self.write('deep/locked/a', b'a')
-        locked = self.local / 'deep' / 'locked'
-        locked.chmod(0)
-        self.addCleanup(locked.chmod, 0o700)
-        with self.assertRaisesRegex(Blocked, 'could not be read: Sync/deep/locked') as caught:
-            self.engine().sync()
-        self.assertEqual(caught.exception.path, 'Sync/deep/locked')
-        self.assertEqual(self.drive.calls, [])
-        self.settings['excluded'] = ['Sync/deep/locked']
-        self.engine().sync()
+        self.write('deep/open', b'o')
+        engine = self.run_with_unreadable('deep/locked')
+        self.assertEqual(engine.skipped, {'Sync/deep/locked': UNREADABLE})
+        self.assertEqual(self.drive.files['Sync/deep/open']['content'], b'o')
         self.assertNotIn('Sync/deep/locked', self.drive.files)
 
     @unittest.skipIf(os.geteuid() == 0, 'root can read every file')
-    def test_unreadable_ticked_folder_is_named_without_a_dot(self):
-        self.local.chmod(0)
-        self.addCleanup(self.local.chmod, 0o700)
-        with self.assertRaisesRegex(Blocked, 'could not be read: Sync\\.') as caught:
-            self.engine().sync()
-        self.assertEqual(caught.exception.path, 'Sync')
+    def test_unreadable_ticked_folder_is_skipped_by_its_own_name(self):
+        self.write('a', b'a')
+        self.engine().sync()
+        self.drive.calls.clear()
+        engine = self.run_with_unreadable('.')
+        self.assertEqual(engine.skipped, {'Sync': UNREADABLE})
+        self.assertEqual(self.drive.calls, [])
+        self.assertIn('Sync/a', self.drive.files)
 
     @unittest.skipIf(os.geteuid() == 0, 'root can read every file')
-    def test_unreadable_file_is_named_and_excluding_it_clears_the_stop(self):
+    def test_unreadable_file_is_skipped_and_the_rest_syncs(self):
         self.write('sub/secret', b'x')
         self.write('sub/open', b'y')
-        secret = self.local / 'sub' / 'secret'
-        secret.chmod(0)
-        self.addCleanup(secret.chmod, 0o600)
-        with self.assertRaisesRegex(Blocked, 'could not be read: Sync/sub/secret') as caught:
-            self.engine().sync()
-        self.assertEqual(caught.exception.path, 'Sync/sub/secret')
-        self.assertEqual(self.drive.calls, [])
-        self.settings['excluded'] = ['Sync/sub/secret']
-        self.engine().sync()
+        engine = self.run_with_unreadable('sub/secret')
+        self.assertEqual(engine.skipped, {'Sync/sub/secret': UNREADABLE})
         self.assertNotIn('Sync/sub/secret', self.drive.files)
         self.assertEqual(self.drive.files['Sync/sub/open']['content'], b'y')
 
     @unittest.skipIf(os.geteuid() == 0, 'root can read every file')
-    def test_folder_that_lists_but_cannot_be_entered_names_the_blocked_item(self):
+    def test_folder_that_lists_but_cannot_be_entered_skips_its_items(self):
         self.write('listed/a', b'a')
-        listed = self.local / 'listed'
-        listed.chmod(0o400)
-        self.addCleanup(listed.chmod, 0o700)
-        with self.assertRaisesRegex(Blocked, 'could not be read: Sync/listed/a') as caught:
-            self.engine().sync()
-        self.assertEqual(caught.exception.path, 'Sync/listed/a')
+        engine = self.run_with_unreadable('listed', 0o400)
+        self.assertEqual(engine.skipped, {'Sync/listed/a': UNREADABLE})
+        self.assertNotIn('Sync/listed/a', self.drive.files)
+
+    @unittest.skipIf(os.geteuid() == 0, 'root can read every file')
+    def test_tracked_file_that_becomes_unreadable_stays_on_drive(self):
+        self.write('a', b'a')
+        self.engine().sync()
+        self.drive.calls.clear()
+        self.run_with_unreadable('a')
+        self.assertEqual(self.drive.calls, [])
+        self.assertEqual(self.drive.files['Sync/a']['content'], b'a')
+
+    def test_unsupported_local_items_are_skipped_with_a_reason_and_the_rest_syncs(self):
+        (self.local / 'link').symlink_to(self.base / 'outside')
+        (self.local / 'dangling').symlink_to(self.base / 'nothing')
+        os.mkfifo(self.local / 'pipe')
+        self.write('mounted/inner', b'i')
+        self.write('good', b'g')
+        real = os.path.ismount
+        with patch('omarchy_drive.engine.os.path.ismount', side_effect=lambda p: str(p).endswith('mounted') or real(p)):
+            engine = self.engine()
+            engine.sync()
+        self.assertEqual(set(engine.skipped), {'Sync/link', 'Sync/dangling', 'Sync/pipe', 'Sync/mounted'})
+        self.assertIn('Symbolic', engine.skipped['Sync/link'])
+        self.assertIn('FIFOs', engine.skipped['Sync/pipe'])
+        self.assertIn('mounts', engine.skipped['Sync/mounted'])
+        self.assertEqual(sorted(self.drive.files), ['Sync', 'Sync/good'])
+
+    def test_nothing_inside_a_nested_mount_is_read(self):
+        self.write('mounted/inner', b'i')
+        real = os.path.ismount
+        with patch('omarchy_drive.engine.os.path.ismount', side_effect=lambda p: str(p).endswith('mounted') or real(p)), \
+                patch('omarchy_drive.engine.digest', side_effect=AssertionError('read inside a mount')):
+            self.assertEqual(scan_local(self.local, 'Sync/', None, {}), {})
+
+    def test_google_doc_clashing_with_a_local_file_leaves_both_alone(self):
+        self.write('doc', b'local')
+        self.write('good', b'g')
+        self.drive.files['Sync'] = {'id': 'sync', 'kind': 'dir', 'hash': None}
+        self.drive.files['Sync/doc'] = {'id': 'doc', 'kind': 'unsupported', 'hash': None}
+        engine = self.engine()
+        engine.sync()
+        self.assertIn('Google Docs', engine.skipped['Sync/doc'])
+        self.assertEqual((self.local / 'doc').read_bytes(), b'local')
+        self.assertEqual(self.drive.files['Sync/doc']['id'], 'doc')
+        self.assertEqual([call for call in self.drive.calls if 'Sync/doc' in call], [])
+        self.assertEqual(self.drive.files['Sync/good']['content'], b'g')
+
+    def test_google_doc_only_on_drive_is_not_listed(self):
+        self.drive.files['Sync'] = {'id': 'sync', 'kind': 'dir', 'hash': None}
+        self.drive.files['Sync/doc'] = {'id': 'doc', 'kind': 'unsupported', 'hash': None}
+        engine = self.engine()
+        engine.sync()
+        self.assertEqual(engine.skipped, {})
+
+    def test_drive_item_with_an_unusable_name_is_listed(self):
+        self.drive.unusable = {'Sync/a/b': 'bad name'}
+        engine = self.engine()
+        engine.sync()
+        self.assertEqual(engine.skipped, {'Sync/a/b': 'bad name'})
+
+    def test_unusable_drive_name_never_shields_the_real_path_it_looks_like(self):
+        self.write('a/b', b'real')
+        self.drive.unusable = {'Sync/a/b': 'bad name'}
+        self.engine().sync()
+        self.assertEqual(self.drive.files['Sync/a/b']['content'], b'real')
+
+    def replace_with_symlink(self, path):
+        target = self.local / path
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        target.symlink_to(self.base / 'outside')
+
+    def test_tracked_file_replaced_by_a_symlink_keeps_its_drive_copy(self):
+        self.write('a', b'a')
+        self.engine().sync()
+        self.drive.calls.clear()
+        self.replace_with_symlink('a')
+        self.assertEqual(self.engine().sync(), [])
+        self.assertEqual(self.drive.calls, [])
+        self.assertEqual(self.drive.files['Sync/a']['content'], b'a')
+
+    def test_tracked_folder_replaced_by_a_symlink_keeps_everything_under_it_on_drive(self):
+        for number in range(30):  # Enough to trip the deletion limit if these counted as deletions.
+            self.write(f'big/{number}', b'x')
+        self.engine().sync()
+        self.drive.calls.clear()
+        self.replace_with_symlink('big')
+        self.assertEqual(self.engine().sync(), [])
+        self.assertEqual(self.drive.calls, [])
+        self.assertIn('Sync/big/7', self.drive.files)
+
+    def test_drive_file_is_not_downloaded_over_a_new_local_symlink(self):
+        self.drive.put('Sync/a', b'cloud')
+        (self.local / 'a').symlink_to(self.base / 'outside')
+        engine = self.engine()
+        engine.sync()
+        self.assertTrue((self.local / 'a').is_symlink())
+        self.assertIn('Sync/a', engine.skipped)
+
+    def test_removing_the_symlink_restores_the_file_and_never_trashes_it(self):
+        self.write('a', b'a')
+        self.engine().sync()
+        self.replace_with_symlink('a')
+        self.engine().sync()
+        (self.local / 'a').unlink()
+        self.engine().sync()
+        self.assertEqual((self.local / 'a').read_bytes(), b'a')
+        self.assertEqual(self.drive.files['Sync/a']['content'], b'a')
+        self.assertNotIn('trash', [call[0] for call in self.drive.calls])
+
+    def test_real_file_replacing_the_symlink_merges_keeping_both_versions(self):
+        self.write('a', b'a')
+        self.engine().sync()
+        self.replace_with_symlink('a')
+        self.engine().sync()
+        (self.local / 'a').unlink()
+        self.write('a', b'new')
+        engine = self.engine()
+        engine.sync()
+        self.assertEqual(engine.skipped, {})
+        copy_name = f'a.conflict-local-{md5(b"new")[:12]}'
+        self.assertEqual((self.local / copy_name).read_bytes(), b'new')
+        self.assertEqual(self.drive.files['Sync/a']['content'], b'a')
+
+    def test_preview_keeps_the_history_of_a_skipped_path(self):
+        self.write('a', b'a')
+        self.engine().sync()
+        self.replace_with_symlink('a')
+        engine = self.engine()
+        engine.snapshot()
+        self.assertIn('Sync/a', engine.skipped)
+        self.assertIn('Sync/a', self.store.baseline())
+
+    def test_skipping_records_no_exclusion(self):
+        (self.local / 'link').symlink_to(self.base / 'outside')
+        self.engine().sync()
+        self.assertNotIn('excluded', self.settings)
+
+    def test_excluded_item_is_not_listed_as_skipped(self):
+        (self.local / 'link').symlink_to(self.base / 'outside')
+        self.settings['excluded'] = ['Sync/link']
+        engine = self.engine()
+        engine.sync()
+        self.assertEqual(engine.skipped, {})
+
+    def test_list_file_names_each_item_with_its_reason(self):
+        (self.local / 'link').symlink_to(self.base / 'outside')
+        os.mkfifo(self.local / 'pipe')
+        self.engine().sync()
+        lines = (self.paths.state / 'cannot-sync.txt').read_text().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[0].startswith('Sync/link — Symbolic'))
+        self.assertTrue(lines[1].startswith('Sync/pipe — '))
+
+    def test_list_file_strips_control_characters_from_names(self):
+        (self.local / 'li\nnk\x1b').symlink_to(self.base / 'outside')
+        self.engine().sync()
+        lines = (self.paths.state / 'cannot-sync.txt').read_text().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith('Sync/li nk  — '))
+
+    def test_list_file_goes_away_once_everything_can_sync(self):
+        link = self.local / 'link'
+        link.symlink_to(self.base / 'outside')
+        self.engine().sync()
+        link.unlink()
+        self.engine().sync()
+        self.assertFalse((self.paths.state / 'cannot-sync.txt').exists())
+        self.assertEqual(read_json(self.paths.status)['skippedCount'], 0)
+
+    def test_status_counts_every_item_but_carries_a_bounded_list(self):
+        for number in range(60):
+            (self.local / f'link{number:02}').symlink_to(self.base / 'outside')
+        self.engine().sync()
+        data = read_json(self.paths.status)
+        self.assertEqual(data['skippedCount'], 60)
+        self.assertEqual(len(data['skipped']), 50)
+        self.assertEqual(data['skipped'][0]['path'], 'Sync/link00')
+        self.assertIn('Symbolic', data['skipped'][0]['reason'])
+        self.assertEqual(len((self.paths.state / 'cannot-sync.txt').read_text().splitlines()), 60)
+
+    def test_finished_sync_says_items_could_not_sync(self):
+        (self.local / 'link').symlink_to(self.base / 'outside')
+        self.engine().sync()
+        self.assertIn('1 item cannot sync', read_json(self.paths.status)['message'])
+
+    def test_finished_sync_with_nothing_skipped_keeps_its_plain_message(self):
+        self.engine().sync()
+        self.assertEqual(read_json(self.paths.status)['kind'], 'success')
+        self.assertNotIn('cannot sync', read_json(self.paths.status)['message'])
 
     def reset_scenario(self):
         for child in self.local.iterdir():
@@ -432,11 +617,6 @@ class EngineTests(unittest.TestCase):
         self.store.forget_subtree('Sync')
 
     def test_each_stable_problem_reports_its_path(self):
-        def symlink():
-            (self.local / 'link').symlink_to(self.base / 'outside')
-        def google_doc():
-            self.write('doc', b'local')
-            self.drive.files['Sync/doc'] = {'id': 'doc', 'kind': 'unsupported', 'hash': None}
         def local_file_drive_folder():
             self.write('clash', b'file')
             self.drive.files['Sync/clash'] = {'id': 'clash', 'kind': 'dir', 'hash': None}
@@ -447,7 +627,7 @@ class EngineTests(unittest.TestCase):
             (self.local / 'clash').mkdir()
             self.store.remember('Sync/clash', {'id': 'x', 'hash': 'y'})
             self.drive.files['Sync'] = {'id': 'sync', 'kind': 'dir', 'hash': None}  # A tracked file means Drive had its folder.
-        table = ((symlink, 'Sync/link'), (google_doc, 'Sync/doc'), (local_file_drive_folder, 'Sync/clash'),
+        table = ((local_file_drive_folder, 'Sync/clash'),
                  (local_folder_drive_file, 'Sync/clash'), (tracked_file_became_folder, 'Sync/clash'))
         for arrange, path in table:
             with self.subTest(problem=arrange.__name__):

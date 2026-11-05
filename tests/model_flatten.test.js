@@ -126,12 +126,11 @@ assert.equal(notice({foldersError: 'No list', warning: 'Scope'}), 'No list');
 assert.equal(notice({warning: 'Scope'}), 'Scope');
 assert.equal(notice({}), '');
 
-// rowWarns: a ticked row that cannot sync, or an item that would stop a sync; a Doc is only greyed out.
+// rowWarns: a ticked row that cannot sync. An item inside a folder is skipped, so it is only greyed out.
 assert.equal(model.rowWarns({depth: 0, selected: true, error: 'Missing'}), true);
 assert.equal(model.rowWarns({depth: 0, selected: false, error: 'Hidden'}), false);
-assert.equal(model.rowWarns({depth: 1, excludable: true, excluded: false, unsupported: 'Symbolic links do not sync'}), true);
-assert.equal(model.rowWarns({depth: 1, excludable: true, excluded: true, unsupported: 'Symbolic links do not sync'}), false);
-assert.equal(model.rowWarns({depth: 1, excludable: false, excluded: false, unsupported: 'Google Docs and shortcuts do not sync'}), false);
+assert.equal(model.rowWarns({depth: 1, excludable: false, excluded: false, unsupported: 'Symbolic links do not sync'}), false);
+assert.equal(model.rowWarns({depth: 1, selected: true, error: 'Why'}), false);
 assert.equal(model.rowWarns({depth: 1, excludable: true, excluded: false, unsupported: ''}), false);
 
 // rowLabel: top level.
@@ -155,6 +154,15 @@ assert.equal(model.rowSize({depth: 1, kind: 'file', size: 2000}), '2 KB');
 assert.equal(model.rowSize({depth: 1, kind: 'file', size: 0}), '0 B');
 assert.equal(model.rowSize({depth: 1, kind: 'dir', size: 0}), '');
 assert.equal(model.rowSize({depth: 1, kind: 'unsupported', size: 0}), '');
+
+// skippedHeading: counts the items, singular and plural; nothing when there are none.
+assert.equal(model.skippedHeading(0), '');
+assert.equal(model.skippedHeading(1), '1 item cannot sync');
+assert.equal(model.skippedHeading(3), '3 items cannot sync');
+
+// skippedMore: how many the panel leaves out, and where the rest are.
+assert.equal(model.skippedMore(3, 3), '');
+assert.equal(model.skippedMore(60, 50), '+ 10 more · omarchy-drive skipped');
 
 // blockedAction: a top-level name can only be unticked.
 assert.equal(model.blockedAction('Work/socket'), 'Exclude this');

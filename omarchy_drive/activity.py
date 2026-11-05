@@ -2,7 +2,7 @@
 import datetime
 import sqlite3
 import time
-from .storage import read_json
+from .storage import atomic_text, read_json
 
 ACTION_LABELS = {
     'upload': 'Upload', 'download': 'Download', 'conflict': 'Keep both versions',
@@ -11,10 +11,15 @@ ACTION_LABELS = {
 }
 DIRECTIONS = {'upload': 'Uploading', 'download': 'Downloading', 'backup': 'Backing up',
               'prepare': 'Preparing', 'verify': 'Verifying'}
+SKIPPED_SHOWN = 50  # status.json is rewritten during transfers; the whole list lives in its own file.
 
 
 def safe(value):
     return ''.join(c if c.isprintable() else ' ' for c in str(value))
+
+
+def cannot_sync_text(count):
+    return f'{count} item{"" if count == 1 else "s"} cannot sync'
 
 
 def size(value):
@@ -62,6 +67,8 @@ def summary_line(data):
     for key, title in (('conflicts', 'conflicts kept'), ('removed', 'archived/trashed'), ('folders', 'folders created')):
         if counts.get(key):
             parts.append(f'{counts[key]} {title}')
+    if data.get('skippedCount'):
+        parts.append(cannot_sync_text(data['skippedCount']))
     return ' · '.join(parts)
 
 
@@ -144,6 +151,17 @@ class Activity:
                          summary=dict(uploaded=0, downloaded=0, conflicts=0, removed=0, folders=0))
         self.write(message='Checking local files and Google Drive…')
 
+    def record_skipped(self, items):
+        rows = [dict(path=safe(path), reason=reason) for path, reason in sorted(items.items())]
+        self.data.update(skippedCount=len(rows), skipped=rows[:SKIPPED_SHOWN])
+        text = ''.join(f'{row["path"]} — {row["reason"]}\n' for row in rows)
+        target = self.paths.cannot_sync
+        if not text:
+            target.unlink(missing_ok=True)
+        # The timer runs this every minute, and an unchanged list needs no disk write.
+        elif not target.exists() or target.read_bytes() != text.encode():
+            atomic_text(target, text)
+
     def planned(self, actions):
         self.waiting = [{'action': a.kind, 'path': a.path} for a in actions]
         self.data.update(total=len(actions), pending=len(actions), queued=len(actions), queue=self.waiting[:20], phase='syncing')
@@ -215,7 +233,11 @@ class Activity:
     def finish(self):
         self.data.update(phase='finished', current=None, active=None, queue=[], pending=0, queued=0, finished=time.time())
         changed = bool(self.data.get('total'))
-        message = 'Up to date · ' + summary_line(self.data) if changed else 'Everything is up to date'
+        skipped = self.data.get('skippedCount', 0)
+        if changed:
+            message = 'Up to date · ' + summary_line(self.data)
+        else:
+            message = 'Up to date · ' + cannot_sync_text(skipped) if skipped else 'Everything is up to date'
         self.write('success', message)
 
     def failure(self, kind, message, path=None):

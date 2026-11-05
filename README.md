@@ -140,10 +140,24 @@ remembered, one-sided files are copied, and differing files keep both versions.
 Ticking starts no transfer by itself. Ticking and excluding are unavailable during
 a sync, and the checkboxes look disabled until it finishes. Rows can still expand.
 
-A problem tied to one path, such as a symlink inside a ticked folder, stops the
-sync and shows **Exclude this**, or **Untick this** when the problem is the ticked
-folder itself. The panel never excludes anything by itself. When Drive cannot be
-read the list shows local folders only, with a note saying so.
+An item that cannot sync is skipped automatically, and everything else carries on.
+That covers symlinks, sockets, FIFOs and devices, nested mounts, unreadable files and
+folders, a Google Doc or shortcut sharing a name with a local file, and Drive items
+whose names cannot be local paths. A skip changes no file on either side, adds
+nothing to your exclusions, and ends by itself once the item can sync, when it merges
+safely. The panel shows `N items cannot sync`, which expands to each item and why. The
+full list is in `~/.local/state/omarchy-drive-v2/cannot-sync.txt`, and
+`omarchy-drive skipped` prints it.
+
+An unreadable file is not backed up while it is skipped, so check this list if you
+rely on Drive as a backup.
+
+Some problems still stop the sync, because skipping could hide a real problem or pick
+the wrong file: a file on one side and a folder of the same name on the other,
+duplicate names on Drive, a Drive item using the app's temporary-file prefix, and a
+missing Drive checksum. The panel shows **Exclude this**, or **Untick this** when the
+problem is the ticked folder itself. When Drive cannot be read the list shows local
+folders only, with a note saying so.
 
 The upstream **Browse all** mount is replaced by **Drive web**. This backend has
 no virtual filesystem or on-demand FUSE mount. Native Google Docs/Sheets/Slides

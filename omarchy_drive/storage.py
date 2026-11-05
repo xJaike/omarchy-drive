@@ -28,13 +28,13 @@ class Offline(DriveError):
     kind = 'offline'
 
 
-def atomic_json(path, value):
+def atomic_text(path, text):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix='.' + path.name)
     try:
-        with os.fdopen(fd, 'w') as stream:
-            json.dump(value, stream)
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
@@ -46,6 +46,10 @@ def atomic_json(path, value):
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def atomic_json(path, value):
+    atomic_text(path, json.dumps(value))
 
 
 def read_json(path, default=None):
@@ -66,6 +70,7 @@ class Paths:
         self.tokens = self.config / 'tokens.json'
         self.status = self.state / 'status.json'
         self.backups = self.state / 'backups'
+        self.cannot_sync = self.state / 'cannot-sync.txt'
 
     def prepare(self):
         for folder in (self.config, self.state):

@@ -11,7 +11,7 @@ import time
 import tty
 
 from . import __version__
-from .activity import Activity, detail_lines, recent_events
+from .activity import Activity, cannot_sync_text, detail_lines, recent_events
 from .auth import Tokens, authorize
 from .drive import Drive, FOLDER
 from .engine import Engine
@@ -116,6 +116,10 @@ def run_sync(args, paths):
                 changed = [a for a in actions if a.kind not in ('remember', 'forget')]
                 for action in changed:
                     print(safe(f'{action.kind:15} {action.path}' + (' — ' + action.note if action.note else '')))
+                for path, reason in sorted(engine.skipped.items()):
+                    print(safe(f'{"skip":15} {path} — {reason}'))
+                if engine.skipped:
+                    print(cannot_sync_text(len(engine.skipped)) + ' and will be skipped.')
                 print(f'{len(changed)} proposed changes. No files were uploaded, overwritten, or deleted.')
                 return 0
             changed = engine.sync(args.allow_many_deletes)
@@ -162,9 +166,11 @@ def status(paths):
     settings = read_json(paths.settings)
     last = data.get('last_success')
     stamp = datetime.datetime.fromtimestamp(last).strftime('%b %d %H:%M:%S') if last else 'not yet synced'
+    skipped_count = data.get('skippedCount', 0)
     heading = {
         'running': 'Checking files' if data.get('phase') == 'scanning' else 'Sync in progress',
-        'success': 'Everything is up to date', 'offline': 'Offline', 'auth': 'Sign-in required',
+        'success': 'Up to date · ' + cannot_sync_text(skipped_count) if skipped_count else 'Everything is up to date',
+        'offline': 'Offline', 'auth': 'Sign-in required',
         'blocked': 'Sync needs attention', 'interrupted': 'Sync interrupted', 'setup': 'Setup needed',
     }.get(data['kind'], data['message'])
     lines = ['Omarchy Drive · ' + heading,
@@ -193,20 +199,33 @@ def doctor(paths):
             from .home_folders import mappings
             from .selection import includes
             included = lambda path: includes(path, settings)
-            local = {}
+            local, skipped = {}, {}
             for name, source in mappings(settings, paths).items():
                 if not source.exists():
                     continue  # Drive-only, as in the engine.
                 if included(name):
                     local[name] = {'kind': 'dir'}
-                    local.update(scan_local(source, name + '/', included))
-            remote = drive.scan(settings['folder_id'], included)
+                    local.update(scan_local(source, name + '/', included, skipped))
+            remote = drive.scan(settings['folder_id'], included, skipped)
             print(f'Local scan: OK ({len(local)} items)')
             print(f'Drive access: OK ({len(remote)} items)')
+            if skipped:
+                print(cannot_sync_text(len(skipped)) + '. List them: omarchy-drive preview')
             print(f'Sync baseline: {len(store.baseline())} files; first-run merging is safe without a baseline')
             print('Next: omarchy-drive preview')
         finally:
             store.close()
+    return 0
+
+
+def skipped(paths):
+    try:
+        lines = paths.cannot_sync.read_text(encoding='utf-8', errors='replace').splitlines()
+    except FileNotFoundError:
+        print('Every item could sync in the last sync.')
+        return 0
+    print('\n'.join(lines))
+    print(cannot_sync_text(len(lines)) + f'. This list is kept in {paths.cannot_sync}')
     return 0
 
 
@@ -254,6 +273,7 @@ def parser():
     commands = app.add_subparsers(dest='command')
     for name in ('watch', 'status', 'preview', 'doctor', 'pause', 'resume', 'open'):
         commands.add_parser(name)
+    commands.add_parser('skipped', help='List the items the last sync could not sync, and why')
     sync = commands.add_parser('sync')
     sync.add_argument('--allow-many-deletes', action='store_true', help='Apply a large deletion plan after reviewing preview')
     connect = commands.add_parser('setup', help='Show Google Cloud instructions or connect a Desktop OAuth client')
@@ -283,6 +303,8 @@ def main(argv=None):
             return 0
         if command == 'doctor':
             return doctor(paths)
+        if command == 'skipped':
+            return skipped(paths)
         if command == 'pause':
             code = unit('disable', '--now', 'omarchy-drive-sync.timer')
             if code == 0:

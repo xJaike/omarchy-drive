@@ -444,7 +444,7 @@ class TreeTests(PanelCase):
                 self.assertEqual(rows[name]['kind'], 'unsupported')
                 self.assertIn(reason, rows[name]['unsupported'])
                 self.assertEqual(rows[name]['size'], 0)
-                self.assertTrue(rows[name]['excludable'])
+                self.assertFalse(rows[name]['excludable'])
         self.assertEqual(rows['plain']['unsupported'], '')
 
     def test_nested_mount_gets_a_reason(self):
@@ -454,7 +454,7 @@ class TreeTests(PanelCase):
             _, rows = self.tree('Work')
         self.assertEqual(rows['mounted']['kind'], 'unsupported')
         self.assertTrue(rows['mounted']['unsupported'])
-        self.assertTrue(rows['mounted']['excludable'])
+        self.assertFalse(rows['mounted']['excludable'])
 
     def test_tree_hashes_nothing(self):
         self.make('Work/a')
@@ -482,14 +482,34 @@ class TreeTests(PanelCase):
                 self.assertTrue(rows[name]['excludable'])
         self.assertFalse(self.tree('Work/x')[1]['inner']['excludable'])
 
-    def test_local_file_clashing_with_a_google_doc_can_be_excluded(self):
-        # Sync stops on this clash, and spec row "Local path clashes with a Google Doc" offers excluding it.
+    def test_local_file_clashing_with_a_google_doc_is_greyed_out(self):
         self.make('Work/Notes')
         _, rows = self.tree('Work', {'root': [folder('Work')], 'Work-id': [doc('Notes')]})
         row = rows['Notes']
         self.assertEqual((row['where'], row['kind']), ('both', 'unsupported'))
         self.assertEqual(row['unsupported'], 'Google Docs and shortcuts do not sync')
-        self.assertTrue(row['excludable'])
+        self.assertFalse(row['excludable'])
+
+    @unittest.skipIf(os.geteuid() == 0, 'root can read every file')
+    def test_unreadable_items_get_a_reason_and_cannot_expand(self):
+        self.make('Work/secret', 'Work/locked/a', 'Work/plain')
+        (self.home / 'Work/secret').chmod(0)
+        (self.home / 'Work/locked').chmod(0)
+        self.addCleanup((self.home / 'Work/locked').chmod, 0o700)
+        _, rows = self.tree('Work')
+        for name in ('secret', 'locked'):
+            with self.subTest(name=name):
+                self.assertIn('read', rows[name]['unsupported'])
+                self.assertFalse(rows[name]['excludable'])
+        self.assertEqual(rows['plain']['unsupported'], '')
+
+    def test_an_item_the_user_excluded_stays_marked_excluded(self):
+        self.make('outside/a')
+        (self.home / 'Work').mkdir()
+        (self.home / 'Work/link').symlink_to(self.home / 'outside')
+        self.set_excluded('Work/link')
+        _, rows = self.tree('Work')
+        self.assertTrue(rows['link']['excluded'])
 
     def test_local_problem_wins_over_the_drive_side(self):
         self.make('outside/a')
@@ -746,6 +766,20 @@ class StatusTests(PanelCase):
         (self.home / 'Work').mkdir()
         self.tick('Work')
         self.assertEqual(panel.status(self.paths)['statusText'], 'Ready to sync')
+
+    def test_status_carries_the_skipped_items(self):
+        (self.home / 'Work').mkdir()
+        self.tick('Work')
+        rows = [{'path': 'Work/link', 'reason': 'Symbolic links do not sync'}]
+        self.paths.record('success', 'Up to date', skipped=rows, skippedCount=3)
+        value = panel.status(self.paths)
+        self.assertEqual(value['skipped'], rows)
+        self.assertEqual(value['skippedCount'], 3)
+
+    def test_status_with_no_sync_yet_has_an_empty_list(self):
+        value = panel.status(self.paths)
+        self.assertEqual(value['skipped'], [])
+        self.assertEqual(value['skippedCount'], 0)
 
     def test_status_command_prints_json_without_the_token(self):
         code, value, _ = self.run_main('status')

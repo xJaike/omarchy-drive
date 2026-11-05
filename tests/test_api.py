@@ -8,7 +8,7 @@ from unittest.mock import patch
 import urllib.error
 
 from omarchy_drive.auth import Tokens, authorize, load_client
-from omarchy_drive.drive import CHANGED_ON_DRIVE, Drive, FOLDER
+from omarchy_drive.drive import BAD_NAME, CHANGED_ON_DRIVE, Drive, FOLDER
 from omarchy_drive.http import HTTP, APIError
 from omarchy_drive.selection import includes
 from omarchy_drive.storage import AuthRequired, Blocked, Offline, Paths, Store, atomic_json
@@ -77,12 +77,18 @@ class APITests(unittest.TestCase):
             with self.assertRaises(Blocked):
                 drive.scan('root')
 
-    def test_traversal_name_blocks(self):
-        for name in ('../escape', '..', '.', '/absolute', '\x00bad', '.omarchy-drive-tmp-secret'):
-            drive = self.adapter([json_response({'mimeType': FOLDER}),
-                                  json_response({'files': [dict(self.item, name=name)]})])
-            with self.subTest(name=name), self.assertRaises(Blocked):
-                drive.scan('root')
+    def test_unsafe_names_never_enter_the_listing(self):
+        for name in ('../escape', '..', '.', '/absolute', '\x00bad'):
+            drive = self.adapter(self.slash_listing(name))
+            skipped = {}
+            with self.subTest(name=name):
+                self.assertEqual(set(drive.scan('root', None, skipped)), {'keep'})
+                self.assertEqual(skipped, {'keep/' + name: BAD_NAME})
+
+    def test_temporary_prefix_blocks(self):
+        drive = self.adapter(self.temporary_listing('.omarchy-drive-tmp-secret'))
+        with self.assertRaises(Blocked):
+            drive.scan('root')
 
     def test_google_document_and_shortcut_are_marked_unsupported(self):
         item = dict(self.item, mimeType='application/vnd.google-apps.document')
@@ -265,32 +271,22 @@ class APITests(unittest.TestCase):
         return [json_response({'mimeType': FOLDER}), json_response({'files': top}),
                 json_response({'files': [dict(self.item, id='inner', name=inner_name)]})]
 
-    def test_slash_name_inside_a_folder_blocks_even_under_an_exclusion(self):
+    def test_slash_name_is_listed_even_where_it_looks_excluded(self):
         drive = self.adapter(self.slash_listing('gone/x'))
-        with self.assertRaises(Blocked):
-            drive.scan('root', lambda p: includes(p, {'home_folders': {'keep': {}}, 'excluded': ['keep/gone']}))
+        skipped = {}
+        result = drive.scan('root', lambda p: includes(p, {'home_folders': {'keep': {}}, 'excluded': ['keep/gone']}), skipped)
+        self.assertEqual(set(result), {'keep'})
+        self.assertEqual(skipped, {'keep/gone/x': BAD_NAME})
 
-    def test_slash_name_inside_a_folder_blocks_without_exclusions(self):
+    def test_unsafe_name_in_a_scan_with_no_list_is_still_left_out(self):
         drive = self.adapter(self.slash_listing('other/x'))
-        with self.assertRaises(Blocked):
-            drive.scan('root')
+        self.assertEqual(set(drive.scan('root')), {'keep'})
 
-    def test_slash_name_inside_a_folder_names_its_location_and_asks_for_a_rename(self):
-        selected = lambda p: includes(p, {'home_folders': {'keep': {}}})
-        for included in (None, selected):
-            drive = self.adapter(self.slash_listing('other/x'))
-            with self.subTest(selection=included is not None), self.assertRaises(Blocked) as caught:
-                drive.scan('root', included)
-            self.assertEqual(str(caught.exception), 'A Drive item in keep has a "/" in its name: other/x. Rename it on Drive before syncing.')
-            self.assertIsNone(caught.exception.path)  # It cannot form an exclusion path, so only a rename fixes it.
-
-    def test_slash_name_message_strips_control_characters(self):
-        folder = dict(self.item, id='keep-id', name='ke\x1b[2Jep', mimeType=FOLDER, md5Checksum=None)
-        drive = self.adapter([json_response({'mimeType': FOLDER}), json_response({'files': [folder]}),
-                              json_response({'files': [dict(self.item, id='inner', name='a/\x1b[31mb')]})])
-        with self.assertRaises(Blocked) as caught:
-            drive.scan('root')
-        self.assertEqual(str(caught.exception), 'A Drive item in ke [2Jep has a "/" in its name: a/ [31mb. Rename it on Drive before syncing.')
+    def test_loose_top_level_unsafe_name_is_not_listed(self):
+        drive = self.adapter(self.slash_listing('a.txt', top_name='x/y'))
+        skipped = {}
+        self.assertEqual(set(drive.scan('root', None, skipped)), {'keep', 'keep/a.txt'})
+        self.assertEqual(skipped, {})
 
     def temporary_listing(self, name):
         folder = dict(self.item, id='keep-id', name='keep', mimeType=FOLDER, md5Checksum=None)
