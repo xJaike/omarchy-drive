@@ -110,6 +110,45 @@ class EngineTests(unittest.TestCase):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
 
+    def test_gitignore_excludes_both_sides_and_reinclusion_merges(self):
+        self.write('secret.log', b'original')
+        self.engine().sync()
+        self.write('.gitignore', b'*.log\ncache/\n')
+        self.write('secret.log', b'local edit')
+        self.write('cache/large', b'ignored')
+        self.drive.put('Sync/cloud.log', b'cloud')
+        actions = self.engine().sync()
+        self.assertFalse(any(a.path.endswith('.log') or '/cache' in a.path for a in actions))
+        self.assertEqual(self.drive.files['Sync/secret.log']['content'], b'original')
+        self.assertFalse((self.local / 'cloud.log').exists())
+        self.assertNotIn('Sync/secret.log', self.store.baseline())
+        # Removing an ignored local file must not delete the old Drive copy on re-inclusion.
+        (self.local / 'secret.log').unlink()
+        self.write('.gitignore', b'')
+        self.engine().sync()
+        self.assertEqual((self.local / 'secret.log').read_bytes(), b'original')
+        self.assertEqual((self.local / 'cloud.log').read_bytes(), b'cloud')
+
+    def test_gitignore_nested_rules_and_negation_without_git_repository(self):
+        self.write('.gitignore', b'*.log\n!keep.log\nbuild/\n/root.txt\n')
+        self.write('project/.gitignore', b'*.tmp\n!important.tmp\n')
+        for path in ('drop.log', 'keep.log', 'build/file', 'root.txt', 'project/root.txt',
+                     'project/drop.tmp', 'project/important.tmp'):
+            self.write(path, b'data')
+        self.engine().sync()
+        for path in ('drop.log', 'build/file', 'root.txt', 'project/drop.tmp'):
+            self.assertNotIn('Sync/' + path, self.drive.files)
+        for path in ('keep.log', 'project/root.txt', 'project/important.tmp', 'project/.gitignore'):
+            self.assertIn('Sync/' + path, self.drive.files)
+
+    def test_gitignored_conflict_copy_blocks_before_mutation(self):
+        self.write('a', b'local')
+        self.write('.gitignore', b'*.conflict-local-*\n')
+        self.drive.put('Sync/a', b'cloud')
+        with self.assertRaisesRegex(Blocked, 'excluded'):
+            self.engine().sync()
+        self.assertEqual((self.local / 'a').read_bytes(), b'local')
+
     def test_first_run_merges_both_trees_and_then_converges(self):
         self.write('local.txt', b'local')
         self.drive.put('Sync/cloud.txt', b'cloud')

@@ -96,3 +96,49 @@ class BlockedPathTests(unittest.TestCase):
     def test_path_attribute(self):
         self.assertEqual(Blocked('m', path='Work/a').path, 'Work/a')
         self.assertIsNone(Blocked('m').path)
+
+
+class GitignoreTests(unittest.TestCase):
+    def test_missing_historical_paths_are_checked_in_one_batch(self):
+        from omarchy_drive.gitignore import selection
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            (source / '.gitignore').write_text('*.log\n', encoding='utf-8')
+            settings = {'home_folders': {'Work': {}}}
+            with selection(settings, {'Work': source}) as included:
+                with patch.object(included, 'git', wraps=included.git) as git:
+                    paths = [f'Work/missing-{number}.log' for number in range(100)]
+                    included.prepare([(path, False) for path in paths])
+                    self.assertTrue(all(not included(path) for path in paths))
+                    self.assertEqual(git.call_count, 1)
+
+    def test_cloud_only_directory_patterns_and_unusual_names(self):
+        from omarchy_drive.gitignore import selection
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            (source / '.gitignore').write_text('cache/\n*.log\n!keep.log\n', encoding='utf-8')
+            settings = {'home_folders': {'Work': {}}}
+            with selection(settings, {'Work': source}) as included:
+                included.prepare([('Work/cache', True), ('Work/cache.txt', False),
+                                  ('Work/Résumé\nnotes.log', False)])
+                self.assertFalse(included('Work/cache', True))
+                self.assertFalse(included('Work/cache/file'))
+                self.assertTrue(included('Work/cache.txt'))
+                self.assertFalse(included('Work/Résumé\nnotes.log'))
+                self.assertTrue(included('Work/keep.log'))
+
+    def test_repository_index_and_private_excludes_are_not_used(self):
+        import subprocess
+        from omarchy_drive.gitignore import selection
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            subprocess.run(['git', 'init', '-q', str(source)], check=True)
+            (source / 'tracked.log').write_text('tracked')
+            subprocess.run(['git', '-C', str(source), 'add', 'tracked.log'], check=True)
+            (source / '.gitignore').write_text('*.log\n')
+            (source / '.git/info/exclude').write_text('private.txt\n')
+            settings = {'home_folders': {'Work': {}}}
+            with selection(settings, {'Work': source}) as included:
+                self.assertFalse(included('Work/tracked.log'))
+                self.assertTrue(included('Work/private.txt'))

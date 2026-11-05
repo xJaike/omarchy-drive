@@ -140,6 +140,15 @@ remembered, one-sided files are copied, and differing files keep both versions.
 Ticking starts no transfer by itself. Ticking and excluding are unavailable during
 a sync, and the checkboxes look disabled until it finishes. Rows can still expand.
 
+Local `.gitignore` files are also respected automatically, including nested rules,
+`!` exceptions, and directory patterns. Git must be installed; a Git repository is
+not required. Rules apply within each ticked home folder, on both local and Drive
+paths, even to files tracked by Git. Global Git ignore rules and `.git/info/exclude`
+are not used. Only ignore files already present locally affect the current scan;
+a `.gitignore` downloaded from Drive takes effect on the next sync.
+Ignored copies stay untouched on both sides. Removing a rule merges those files
+again safely. The `.gitignore` files themselves sync unless a rule excludes them.
+
 An item that cannot sync is skipped automatically, and everything else carries on.
 That covers symlinks, sockets, FIFOs and devices, nested mounts, unreadable files and
 folders, a Google Doc or shortcut sharing a name with a local file, and Drive items

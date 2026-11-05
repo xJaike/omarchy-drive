@@ -103,7 +103,11 @@ class Drive:
         result, pending, visited = {}, [('', folder_id)], {folder_id}
         while pending:
             prefix, parent = pending.pop()
-            for item in self.children(parent):
+            children = list(self.children(parent))
+            if hasattr(included, 'prepare'):
+                included.prepare([(f'{prefix}/{item["name"]}' if prefix else item['name'], item['mimeType'] == FOLDER)
+                                  for item in children if usable_name(item['name'])])
+            for item in children:
                 path = f'{prefix}/{item["name"]}' if prefix else item['name']
                 # Checked before the selection and kept out of the listing, because a "/" would fake a deeper path.
                 # Loose top-level items never sync, so there is nothing to report about them.
@@ -112,7 +116,8 @@ class Drive:
                         skipped[path] = BAD_NAME
                     continue
                 # Pruned paths are never validated, so problems inside them cannot block a sync.
-                if included is not None and not included(path):
+                if included is not None and not (included(path, item['mimeType'] == FOLDER)
+                                                 if hasattr(included, 'prepare') else included(path)):
                     continue
                 if item['name'].startswith('.omarchy-drive-tmp-'):
                     raise Blocked(safe(f'A Drive file uses the app temporary-file prefix: {path}. Rename it before syncing.'), path=path)

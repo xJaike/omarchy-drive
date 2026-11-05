@@ -13,6 +13,7 @@ from .drive import GOOGLE_DOC, digest
 from .activity import Activity
 from .selection import IGNORED, includes, under_any
 from .home_folders import mappings, record_identity
+from .gitignore import selection
 from .storage import Blocked, atomic_json
 
 TEMP_PREFIX = '.omarchy-drive-tmp-'
@@ -62,11 +63,14 @@ def scan_local(root, prefix='', included=None, skipped=None):
         rest = Path(error.filename).relative_to(root).as_posix()
         skipped[prefix.rstrip('/') if rest == '.' else prefix + rest] = UNREADABLE
     for directory, folders, files in os.walk(root, followlinks=False, onerror=scan_error):
+        if hasattr(included, 'prepare'):
+            included.prepare([(prefix + (Path(directory) / name).relative_to(root).as_posix(), name in folders)
+                              for name in folders + files])
         for name in list(folders) + files:
             path = Path(directory) / name
             relative = prefix + path.relative_to(root).as_posix()
             # Removing a folder here also keeps os.walk from opening it, so nothing below it can block.
-            if name.startswith(TEMP_PREFIX) or relative in IGNORED or (included and not included(relative)):
+            if name.startswith(TEMP_PREFIX) or relative in IGNORED or (included and not (included(relative, name in folders) if hasattr(included, 'prepare') else included(relative))):
                 if name in folders:
                     folders.remove(name)
                 continue
@@ -188,8 +192,11 @@ class Engine:
         return self.home_source(path).parent
 
     def snapshot(self, allow_many_deletes=False):
-        included = lambda path: includes(path, self.settings)
         sources = mappings(self.settings, self.paths)
+        with selection(self.settings, sources) as included:
+            return self._snapshot(included, sources, allow_many_deletes)
+
+    def _snapshot(self, included, sources, allow_many_deletes):
         # With no recorded identity nothing proves the sync history describes this folder, so both sides merge.
         self.merging = {name for name, entry in self.settings.get('home_folders', {}).items()
                         if (entry or {}).get('identity') is None}
@@ -217,8 +224,11 @@ class Engine:
         self.local = {p: item for p, item in self.local.items() if not under_any(p, problems)}
         self.remote = {p: item for p, item in self.remote.items() if not under_any(p, problems)}
         recorded = self.store.baseline()
+        # Deleted and cloud-only historical paths also need ignore evaluation. Batch
+        # them so a large baseline does not launch one Git process per missing file.
+        included.prepare([(path, False) for path in recorded])
         # Same rule as excluding: once the item can sync again it merges, so nothing is deleted.
-        self.stale = [p for p in recorded if under_any(p, problems)]
+        self.stale = [p for p in recorded if under_any(p, problems) or (includes(p, self.settings) and not included(p))]
         baseline = {p: item for p, item in recorded.items()
                     if included(p) and p.partition('/')[0] not in self.merging and not under_any(p, problems)}
         # Otherwise every file would plan as a Drive deletion, and a small folder would pass the deletion limit.
@@ -362,7 +372,9 @@ class Engine:
         original = PurePosixPath(path)
         name = original.stem + '.conflict-local-' + left['hash'][:12] + original.suffix
         conflict = str(original.with_name(name))
-        if not includes(conflict, self.settings):
+        with selection(self.settings, mappings(self.settings, self.paths)) as included:
+            conflict_included = included(conflict)
+        if not conflict_included:
             raise Blocked(f'The conflict-copy name is excluded: {conflict}. Include it or rename the file before syncing.')
         target = self.local_target(conflict)
         remote_copy = self.remote.get(conflict)

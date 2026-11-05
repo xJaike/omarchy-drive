@@ -2,7 +2,7 @@
 # Install standalone helpers; leave scheduled transfers paused until sign-in.
 set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-for dependency in python3 systemctl; do
+for dependency in python3 systemctl git; do
   command -v "$dependency" >/dev/null || { echo "Missing dependency: $dependency" >&2; exit 1; }
 done
 python3 -c 'import sys; sys.exit("Python 3.11 or newer is required") if sys.version_info < (3, 11) else None'
