@@ -190,6 +190,7 @@ anything by itself.
 | Situation | Behaviour | Exclude this |
 |---|---|---|
 | Ticked folder missing or replaced | Stops before changes, names the folder, offers untick | No |
+| Ticked folder with sync history gone from Drive | Stops before changes, names the folder, offers untick | No, offers Untick this |
 | Symlink, socket or nested mount | Stops, names the path | Yes |
 | Local path clashes with a Google Doc | Stops, names the path | Yes |
 | File and folder type conflict | Stops, names the path | Yes |

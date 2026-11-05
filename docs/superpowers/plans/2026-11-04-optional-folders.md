@@ -772,6 +772,7 @@ paths.prepare()
       if drive.get(file_id)['mimeType'] == 'application/octet-stream':
           drive.http.json('PATCH', query_url(API + 'files/' + file_id, fields=FIELDS), data={'mimeType': 'text/plain'})
       before = drive.get(file_id)
+      assert before['mimeType'] != 'application/octet-stream', 'The type check would prove nothing. Stop and report.'
       stale = drive.condition(before)
 
       drive.upload(versions['v2'], folder['id'], 'probe.txt', sums['v2'], before)
@@ -796,17 +797,20 @@ paths.prepare()
       drive.trash(drive.get(folder['id']))
   ```
 
-  Afterwards, confirm the test folder is in Trash, delete the trial directory, and report all five results. If either stale write is not rejected, stop and report it, because the spec's protection against edits arriving mid-sync would not hold. If `mimeType` changes, stop and report it, because every overwritten file on the user's Drive would change type.
+  Run it with `trial=$(mktemp -d ~/.cache/omarchy-drive-trial.XXXX); trap 'rm -rf "$trial"' EXIT; python3 real_writes.py "$trial"`. Afterwards, confirm the test folder is in Trash, confirm `ls -d ~/.cache/omarchy-drive-trial.* 2>/dev/null` prints nothing, and report all five results. If either stale write is not rejected, stop and report it, because the spec's protection against edits arriving mid-sync would not hold. If `mimeType` changes, stop and report it, because every overwritten file on the user's Drive would change type.
 
 - [ ] **Step 2: Trial migration (ask first).** Stop anything that could change the database while it is copied, and confirm:
 
   ```bash
   systemctl --user is-enabled omarchy-drive-sync.timer   # Write this down.
   systemctl --user stop omarchy-drive-sync.timer omarchy-drive-sync.service
-  systemctl --user is-active omarchy-drive-sync.timer omarchy-drive-sync.service   # Both must print inactive. Stop if either prints active.
+  if systemctl --user is-active --quiet omarchy-drive-sync.timer omarchy-drive-sync.service; then echo 'STOP: still active'; exit 1; fi
   trial=$(mktemp -d ~/.cache/omarchy-drive-trial.XXXX)
-  python3 trial_migration.py "$trial"; rm -rf "$trial"; test ! -e "$trial" && echo removed
+  trap 'rm -rf "$trial"' EXIT
+  python3 trial_migration.py "$trial" && echo 'trial passed' || echo 'TRIAL FAILED: stop and report'
   ```
+
+  Afterwards, `ls -d ~/.cache/omarchy-drive-trial.* 2>/dev/null` must print nothing, in case the shell was killed before the `trap` ran.
 
   Ask the user not to press **Sync now** meanwhile. `trial_migration.py` is the common start, followed by the code below. It copies the settings and sign-in, and copies the database with the SQLite backup API, because the database uses WAL and a plain copy can miss rows. `HOME` stays real, so the real home folders are read and nothing in them is written.
 
@@ -836,6 +840,7 @@ paths.prepare()
   settings, baseline, _ = facts()
   assert 'local_dir' in settings, 'These settings are already migrated. Stop and ask.'
   print('Baseline rows before:', len(baseline))
+  assert baseline, 'The sync history is empty, so 0 proposed changes would prove nothing. Stop and ask.'
   assert migrate(paths) is True
   migrated, kept, identity = facts()
   assert kept == baseline, 'The migration changed the sync history.'
@@ -890,7 +895,10 @@ paths.prepare()
      git -C "$plugin" status --short > "$restore/plugin-status"
      git -C "$plugin" diff --binary HEAD > "$restore/plugin.diff"
      git -C "$plugin" ls-files --others --exclude-standard -z | tar --null -C "$plugin" -T - -czf "$restore/plugin-untracked.tar.gz"
+     echo "$restore"
      ```
+
+     Shell variables do not survive between commands here. Write down the printed path, and in every later block set `plugin` and `restore` to their literal values before using them.
 
   4. Confirm no earlier migration's copies are present. `migrate` keeps a copy it finds, so an old one would become the undo copy without anyone noticing. If either exists, stop and ask.
 
@@ -905,6 +913,7 @@ paths.prepare()
      from pathlib import Path
 
      restore = Path(sys.argv[1])
+     assert restore.is_absolute() and restore.is_dir(), restore
      settings_file = Path.home() / '.config/omarchy-drive/settings.json'
      database_file = Path.home() / '.local/state/omarchy-drive-v2/sync.sqlite3'
      shutil.copy2(settings_file, restore / 'settings.json')
@@ -915,6 +924,7 @@ paths.prepare()
      settings = json.loads(settings_file.read_text())
      expected = dict(baseline=source.execute('SELECT COUNT(*) FROM baseline').fetchone()[0],
                      home_folders=settings.get('home_folders'), folder_id=settings['folder_id'])
+     assert expected['baseline'] > 0, 'The sync history is empty. Stop and ask.'
      (restore / 'expected.json').write_text(json.dumps(expected))
      print('Baseline rows:', expected['baseline'])
      ```
@@ -927,7 +937,9 @@ paths.prepare()
      import json, sqlite3, sys
      from pathlib import Path
 
-     expected = json.loads((Path(sys.argv[1]) / 'expected.json').read_text())
+     restore = Path(sys.argv[1])
+     assert restore.is_absolute() and restore.is_dir(), restore
+     expected = json.loads((restore / 'expected.json').read_text())
      settings = json.loads((Path.home() / '.config/omarchy-drive/settings.json').read_text())
      database_file = Path.home() / '.local/state/omarchy-drive-v2/sync.sqlite3'
      database = sqlite3.connect(database_file.as_uri() + '?mode=ro', uri=True)
@@ -950,6 +962,8 @@ paths.prepare()
   - excluding and re-including a test file, then running preview after each
   - excluding several items quickly while a row is loading, because the tree re-fetch depends on Quickshell process behaviour that no test has verified: killing a running read, then starting the next one. Each row must end up correct, none stuck on `Loading…`, and `excluded` in `settings.json` must hold exactly what was clicked
   - the Backups button
+
+  If any check fails, stop with the timer off and tell the user before anything else. A panel that does not load means restoring from the restore point.
 
 - [ ] **Step 5: First real sync (ask first).** With the timer still off, confirm the first sync writes nothing unexpected to Drive. List the Drive side before and after, with this read-only script. It uses a throwaway database, so it cannot touch the real one, and it may refresh the sign-in, as the app does. Save it as `drive_listing.py`.
 
@@ -975,16 +989,29 @@ paths.prepare()
   print(len(rows), 'Drive items')
   ```
 
+  First list the Drive side and preview, then stop and read the result. Put in the literal restore path from Step 3.
+
   ```bash
+  set -euo pipefail
+  restore=<literal path from Step 3>
+  test -d "$restore"
   python3 drive_listing.py "$restore/drive-before.json"
   omarchy-drive preview
+  ```
+
+  Run the sync only as a separate command, and only once the preview matches what is expected. If the preview lists anything unexplained, stop with the timer off and tell the user.
+
+  ```bash
+  set -euo pipefail
+  restore=<literal path from Step 3>
+  test -f "$restore/drive-before.json"
   omarchy-drive sync
   python3 drive_listing.py "$restore/drive-after.json"
-  diff "$restore/drive-before.json" "$restore/drive-after.json"
+  diff "$restore/drive-before.json" "$restore/drive-after.json" || true
   python3 check_state.py "$restore"
   ```
 
-  Expected: `Applied` reports the same number of changes as the preview, and `diff` shows only what the preview listed, so nothing at all for `0 proposed changes`. The baseline count equals the one recorded in Step 3, plus any new files the preview listed. A file excluded and re-included in Step 4 returns to the count with this sync. Explain any other difference, and do not turn the timer on until it is explained.
+  Expected: `Applied` reports the same number of changes as the preview, and `diff` shows only what the preview listed, so nothing at all for `0 proposed changes`. The listing covers ticked, non-excluded paths only, so it cannot show a write elsewhere in the Drive folder; `check_state.py` fails if the baseline count changed, so a preview that listed new files means comparing that count by hand. The baseline count equals the one recorded in Step 3, plus any new files the preview listed. A file excluded and re-included in Step 4 returns to the count with this sync. Explain any other difference, and do not turn the timer on until it is explained.
 
 - [ ] **Step 6: Success criteria.** Confirm each of the spec's five success criteria, and report any not demonstrated. Deleting `~/GoogleDrive` is the user's own step, then one sync to confirm criterion 1.
 
