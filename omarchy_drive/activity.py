@@ -11,6 +11,7 @@ ACTION_LABELS = {
 }
 DIRECTIONS = {'upload': 'Uploading', 'download': 'Downloading', 'backup': 'Backing up',
               'prepare': 'Preparing', 'verify': 'Verifying'}
+LARGE_FILE = 16 * 1024 * 1024  # Hashing one takes long enough that its name is written at once.
 SKIPPED_SHOWN = 50  # status.json is rewritten during transfers; the whole list lives in its own file.
 
 
@@ -171,14 +172,15 @@ class Activity:
         elif not target.exists() or target.read_bytes() != text.encode():
             atomic_text(target, text)
 
-    def checked(self, side, path):
-        """Note the item a scan is about to check. side is 'local' or 'drive'; a long scan writes about four times a second."""
+    def checked(self, side, path, size=0):
+        """Note the item a scan is about to check. side is 'local' or 'drive'. A long scan writes about
+        four times a second, but a large file at once, since reading it can take minutes."""
         if not self.started:
             return  # preview scans too, and writes no status.
         checking = self.data.get('checking')
         count = checking['count'] + 1 if checking and checking.get('side') == side else 1
         self.data['checking'] = dict(side=side, path=path, count=count)
-        if self.clock() - self.last_write >= .25:
+        if size >= LARGE_FILE or self.clock() - self.last_write >= .25:
             self.write()
 
     def planned(self, actions):

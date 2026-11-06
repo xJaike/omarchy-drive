@@ -11,7 +11,7 @@ import time
 import tty
 
 from . import __version__
-from .activity import Activity, cannot_sync_text, detail_lines, recent_events
+from .activity import Activity, cannot_sync_text, detail_lines, recent_events, summary_line
 from .auth import Tokens, authorize
 from .drive import Drive, FOLDER
 from .engine import Engine
@@ -163,24 +163,20 @@ def status(paths):
         current = data['current']
         prefix = {'upload': 'Drive ↑', 'download': 'Drive ↓', 'backup': 'Drive backup'}.get(current['direction'], 'Drive ↻')
         data['label'] = prefix + (f' {current.get("percent", 0):.0f}%' if current['direction'] in ('upload', 'download', 'backup') else '')
-    settings = read_json(paths.settings)
-    last = data.get('last_success')
-    stamp = datetime.datetime.fromtimestamp(last).strftime('%b %d %H:%M:%S') if last else 'not yet synced'
-    skipped_count = data.get('skippedCount', 0)
+    # The tooltip is the status and the summary; the panel shows files and progress.
     heading = {
         'running': 'Checking files' if data.get('phase') == 'scanning' else 'Sync in progress',
-        'success': 'Up to date · ' + cannot_sync_text(skipped_count) if skipped_count else 'Everything is up to date',
+        # The summary line carries the count of items that cannot sync.
+        'success': 'Up to date' if data.get('skippedCount') else 'Everything is up to date',
         'offline': 'Offline', 'auth': 'Sign-in required',
         'blocked': 'Sync needs attention', 'interrupted': 'Sync interrupted', 'setup': 'Setup needed',
     }.get(data['kind'], data['message'])
-    lines = ['Omarchy Drive · ' + heading,
-             f'{len(settings.get("home_folders", {}))} folders ↔ Drive/{settings.get("folder_name", "Omarchy")}',
-             'Automatic sync: ' + ('enabled' if data.get('scheduled') else 'paused'),
-             'Last successful sync: ' + stamp]
-    if data['kind'] not in ('running', 'success'):
-        lines += ['', data['message']]
-    lines += ['', *detail_lines(data), '', 'Left: dashboard · Middle: sync now · Right: open folder']
-    # Bound tooltip width so long paths cannot push the hover card off screen.
+    lines = ['Omarchy Drive · ' + heading]
+    if data['kind'] not in ('running', 'success') and data['message'] != heading:
+        lines.append(data['message'])
+    if 'summary' in data:
+        lines.append(summary_line(data))
+    # Bound tooltip width so a long path in a message cannot push the hover card off screen.
     import textwrap
     data['tooltip'] = '\n'.join(part for line in lines for part in
                                (textwrap.wrap(safe(line), width=84, break_on_hyphens=False) or ['']))

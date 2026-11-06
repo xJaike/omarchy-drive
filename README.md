@@ -14,8 +14,8 @@ and trademark information, and [LICENSE](LICENSE) for the retained MIT copyright
 notices.
 
 The bar is icon-only. Its badge changes for uploading/downloading, syncing,
-up-to-date, paused, offline and error states. Hover for filenames, per-file
-percentage, transfer rate, ETA, waiting files and recent activity. Left-click
+up-to-date, paused, offline and error states. Hover for the status and a
+summary of the last sync; the panel shows each file's progress. Left-click
 opens the panel; right-click refreshes it.
 
 ![Native recent-files view with sample data](docs/images/recent-files.png)

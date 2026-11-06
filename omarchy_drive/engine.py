@@ -54,7 +54,7 @@ def local_path(root, relative):
 
 def scan_local(root, prefix='', included=None, skipped=None, progress=None):
     """List the folder's files. An item that cannot sync goes into skipped, with why, and is left out.
-    progress, if given, is called with each file's path before the file is read."""
+    progress, if given, is called with each file's path and size before the file is read."""
     skipped = {} if skipped is None else skipped
     root = Path(root)
     if root.is_symlink() or not root.is_dir() or os.path.ismount(root):
@@ -87,7 +87,7 @@ def scan_local(root, prefix='', included=None, skipped=None, progress=None):
                         result[relative] = {'kind': 'dir'}
                 elif stat.S_ISREG(info.st_mode):
                     if progress:
-                        progress(relative)
+                        progress(relative, info.st_size)
                     checksum = digest(path)
                     after = path.stat()
                     if (info.st_size, info.st_mtime_ns, info.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
@@ -212,7 +212,7 @@ class Engine:
             if included(name):
                 self.local[name] = {'kind': 'dir'}
                 self.local.update(scan_local(source, name + '/', included, problems,
-                                             lambda path: self.activity.checked('local', path)))
+                                             lambda path, size: self.activity.checked('local', path, size)))
         # Build complete listings before any local or cloud mutation.
         self.remote = self.drive.scan(self.settings['folder_id'], included, unusable)
         for name in sources:

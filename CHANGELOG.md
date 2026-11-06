@@ -25,7 +25,10 @@ something is ticked.
 - The panel shows sync progress per file. While checking, it names the file being
   read with a running count. While syncing, it shows **Syncing · 4 of 120**, the
   current file's progress, and the next three files as **Waiting**. Creating a
-  folder no longer shows an empty 0 B progress bar.
+  folder no longer shows an empty 0 B progress bar. A large file is named at once,
+  so the panel is not blank while it is read.
+- The bar tooltip is the status, the reason when a sync needs attention, and the
+  summary. Files, folders, schedule and recent activity are in the panel.
 - A ticked folder is no longer reported as replaced after a reboot. Its identity
   used the device number, which btrfs assigns at mount time, so a sync interrupted
   by a shutdown needed the folder unticked and ticked again. The identity is now the

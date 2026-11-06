@@ -47,9 +47,29 @@ class ActivityTests(unittest.TestCase):
         with self.paths.lock():
             displayed = status(self.paths)
         self.assertEqual(displayed['label'], 'Drive ↑ 50%')
-        self.assertIn('Upload', displayed['tooltip'])
-        self.assertIn('Download: Pictures/photo.jpg', displayed['tooltip'])
-        self.assertIn('ETA 2s', displayed['tooltip'])
+        # The panel shows the files; the tooltip stays at the status and summary.
+        self.assertEqual(displayed['tooltip'].splitlines(), ['Omarchy Drive · Sync in progress', '0 uploaded · 0 downloaded'])
+
+    def test_tooltip_is_the_status_and_summary(self):
+        self.activity.start()
+        self.now = 1
+        self.activity.checked('local', 'Work/a.txt')
+        with self.paths.lock():
+            self.assertEqual(status(self.paths)['tooltip'].splitlines(),
+                             ['Omarchy Drive · Checking files', '0 uploaded · 0 downloaded'])
+        self.activity.planned([Action('upload', 'Work/a.txt')])
+        self.activity.file_done('upload', 'Work/a.txt', 10)
+        self.activity.finish()
+        self.assertEqual(status(self.paths)['tooltip'].splitlines(),
+                         ['Omarchy Drive · Everything is up to date', '1 uploaded · 0 downloaded'])
+        self.activity.start()
+        self.activity.failure('offline', 'Google Drive is unreachable. The next sync will retry.')
+        self.assertEqual(status(self.paths)['tooltip'].splitlines(),
+                         ['Omarchy Drive · Offline', 'Google Drive is unreachable. The next sync will retry.',
+                          '0 uploaded · 0 downloaded'])
+
+    def test_tooltip_before_any_sync_is_the_status_alone(self):
+        self.assertEqual(status(self.paths)['tooltip'].splitlines(), ['Omarchy Drive · Ready to sync'])
 
     def test_backup_download_is_distinct_from_user_download(self):
         self.activity.start()
@@ -133,6 +153,13 @@ class ActivityTests(unittest.TestCase):
             self.assertEqual(record.call_count, 1)
         self.assertEqual(read_json(self.paths.status)['checking']['count'], 101)
 
+    def test_a_large_file_is_reported_before_it_is_read(self):
+        # Hashing a large file can take minutes, so its name must not wait behind the four-a-second limit.
+        self.activity.start()
+        self.activity.checked('local', 'small.txt', 10)
+        self.activity.checked('local', 'backup.sql', 8 * 1024 ** 3)
+        self.assertEqual(read_json(self.paths.status)['checking']['path'], 'backup.sql')
+
     def test_checking_outside_a_sync_writes_nothing(self):
         # preview scans with an Activity it never starts, and must leave the status file alone.
         self.now = 10
@@ -175,15 +202,14 @@ class ActivityTests(unittest.TestCase):
             store.close()
         atomic_json(self.paths.status, {'kind': 'success', 'message': 'Up to date'})
         displayed = status(self.paths)
-        self.assertIn('↑ Uploaded: Projects/earlier.txt', displayed['tooltip'])
-        self.assertIn('↓ Downloaded: Photos/earlier.jpg', displayed['tooltip'])
+        self.assertEqual([(row['action'], row['path']) for row in displayed['recent']],
+                         [('download', 'Photos/earlier.jpg'), ('upload', 'Projects/earlier.txt')])
         self.assertNotIn('0 uploaded', displayed['tooltip'])
 
     def test_tooltip_wraps_long_paths_and_removes_terminal_controls(self):
         self.activity.start()
-        self.activity.phase('upload', 'Long/' + 'a' * 180 + '\x1b.pdf', 100)
-        with self.paths.lock():
-            displayed = status(self.paths)
+        self.activity.failure('blocked', 'Cannot sync Long/' + 'a' * 180 + '\x1b.pdf')
+        displayed = status(self.paths)
         self.assertTrue(all(len(line) <= 84 for line in displayed['tooltip'].splitlines()))
         self.assertNotIn('\x1b', displayed['tooltip'])
 
@@ -245,9 +271,9 @@ class BlockedPathFromCommandTests(unittest.TestCase):
         self.drive.put('Work/b.txt', b'b')
         calls = []
         original = Activity.checked
-        def spy(activity, side, path):
+        def spy(activity, side, path, size=0):
             calls.append((side, path))
-            return original(activity, side, path)
+            return original(activity, side, path, size)
         with patch.object(Activity, 'checked', spy):
             self.assertEqual(self.sync(), 0)
         self.assertIn(('local', 'Work/a.txt'), calls)
@@ -303,8 +329,7 @@ class BlockedPathFromCommandTests(unittest.TestCase):
         (self.home/'Work'/'link').symlink_to(self.home)
         self.sync()
         tooltip = status(self.paths)['tooltip']
-        self.assertIn('Up to date · 1 item cannot sync', tooltip)
-        self.assertNotIn('Everything', tooltip)
+        self.assertEqual(tooltip.splitlines(), ['Omarchy Drive · Up to date', '0 uploaded · 0 downloaded · 1 folders created · 1 item cannot sync'])
 
     def test_doctor_reports_items_that_cannot_sync(self):
         (self.home/'Work'/'link').symlink_to(self.home)

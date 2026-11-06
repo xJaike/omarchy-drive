@@ -372,8 +372,9 @@ class EngineTests(unittest.TestCase):
         self.write('b.txt', b'b')
         self.write('skip/c.txt', b'c')
         seen = []
-        scan_local(self.local, 'Sync/', lambda path: not path.startswith('Sync/skip'), progress=seen.append)
-        self.assertEqual(sorted(seen), ['Sync/b.txt', 'Sync/keep/a.txt'])
+        scan_local(self.local, 'Sync/', lambda path: not path.startswith('Sync/skip'),
+                   progress=lambda path, size: seen.append((path, size)))
+        self.assertEqual(sorted(seen), [('Sync/b.txt', 1), ('Sync/keep/a.txt', 1)])
 
     def test_store_identity_is_the_drive_folder_only(self):
         self.engine().snapshot()

@@ -252,7 +252,7 @@ def status(paths):
         lastFinishedTs=view.get('last_success', 0),
         warning='Sync scope: Drive/' + settings.get('folder_name', 'Omarchy') + '. Unselected files stay on disk.',
         lastError=view['message'] if kind in ('blocked','offline','error','auth','interrupted') else '',
-        detailsTooltip=view['tooltip'].replace('Left: dashboard · Middle: sync now · Right: open folder', 'Left: panel · Right: refresh').replace('Automatic sync: enabled' if not timer else 'Automatic sync: paused', 'Automatic sync: paused' if not timer else 'Automatic sync: enabled'), activityText='\n'.join(detail_lines(view)),
+        detailsTooltip=view['tooltip'], activityText='\n'.join(detail_lines(view)),
         current=current, recent=view.get('recent', []), queue=view.get('queue', []), pending=view.get('pending', 0),
         checking=view.get('checking') if syncing else None, active=view.get('active') if syncing else None, total=view.get('total', 0), completed=view.get('completed', 0),
         queued=view.get('queued', 0),
