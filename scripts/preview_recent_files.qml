@@ -36,7 +36,20 @@ ShellRoot {
         width: parent.width
         remaining: 3
         retryEnabled: preview.demoState === "attention"
-        current: preview.demoState === "uploading" ? ({direction: "upload", name: "Documents/Project brief.pdf", bytes: 5242880, total: 10485760, percent: 50, speed: 2097152, eta: 3}) : null
+        current: preview.demoState === "uploading" ? ({direction: "upload", name: "Documents/Project brief.pdf", bytes: 5242880, total: 10485760, percent: 50, speed: 2097152, eta: 3})
+               : preview.demoState === "folder" ? ({direction: "prepare", label: "Create Drive folder", name: "Projects/site/assets", bytes: 0, total: 0, percent: 0, speed: 0, eta: null}) : null
+        active: preview.demoState === "uploading" ? ({action: "upload", path: "Documents/Project brief.pdf"})
+              : preview.demoState === "folder" ? ({action: "mkdir-remote", path: "Projects/site/assets"}) : null
+        checking: preview.demoState === "checking" ? ({side: "local", path: "Projects/site/node_modules/some-package/dist/a-rather-long-file-name.min.js", count: 12480}) : null
+        total: preview.demoState === "uploading" || preview.demoState === "folder" ? 120 : 0
+        completed: preview.demoState === "uploading" || preview.demoState === "folder" ? 3 : 0
+        queued: preview.demoState === "uploading" || preview.demoState === "folder" ? 116 : 0
+        queue: preview.demoState === "uploading" || preview.demoState === "folder" ? [
+          {action: "upload", path: "Notes/Ideas.md"},
+          {action: "download", path: "Photos/Harbor.jpg"},
+          {action: "mkdir-remote", path: "Projects/site"},
+          {action: "upload", path: "Documents/Budget.xlsx"}
+        ] : []
         entries: preview.demoState === "empty" ? [] : [
           {path: "Documents/Project brief.pdf", action: "upload", state: "completed", size: 10485760, time: Date.now()/1000-45},
           {path: "Photos/Harbor.jpg", action: "download", state: "failed", error: "Connection interrupted. Retry sync to resume.", time: Date.now()/1000-120},

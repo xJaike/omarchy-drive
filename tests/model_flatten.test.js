@@ -190,4 +190,29 @@ assert.equal(model.folderSummary({tickedCount: 3, localBytes: 2000, localBytesAp
 for (const name of ['rootFilesMeta', 'folderMeta', 'folderGlyph', 'shortHomePath'])
   assert.equal(model[name], undefined, name);
 
+// Sync progress: the checking header, the position in the plan, the active glyph and the waiting rows.
+assert.equal(model.checkingHeading({side: 'local', count: 12480}), 'CHECKING YOUR FILES · 12,480 CHECKED');
+assert.equal(model.checkingHeading({side: 'drive', count: 7}), 'CHECKING GOOGLE DRIVE · 7 CHECKED');
+assert.equal(model.groupDigits(1234567), '1,234,567');
+assert.equal(model.groupDigits(999), '999');
+assert.equal(model.syncHeading(120, 3), 'SYNCING · 4 OF 120');
+assert.equal(model.syncHeading(120, 120), 'SYNCING · 120 OF 120');
+assert.equal(model.syncHeading(0, 0), 'ACTIVE TRANSFER');
+assert.equal(model.activeGlyph({action: 'download'}, {direction: 'prepare'}), 'circle-arrow-down');
+assert.equal(model.activeGlyph({action: 'upload'}, {direction: 'backup'}), 'circle-arrow-up');
+assert.equal(model.activeGlyph({action: 'mkdir-remote'}, {direction: 'prepare'}), 'folder-open');
+assert.equal(model.activeGlyph({action: 'conflict'}, {direction: 'download'}), 'circle-arrow-down');
+assert.equal(model.activeGlyph(null, {direction: 'upload'}), 'circle-arrow-up');
+assert.equal(model.activeGlyph(null, null), 'rotate-cw');
+assert.equal(model.hasBytes({total: 10}), true);
+assert.equal(model.hasBytes({total: 0}), false);
+assert.equal(model.hasBytes(null), false);
+const waiting = model.waitingRows([{action: 'upload', path: 'Docs/a.txt'}, {action: 'mkdir-remote', path: 'Docs/New'},
+  {action: 'download', path: 'b.txt'}, {action: 'upload', path: 'c.txt'}], 3);
+assert.deepEqual(waiting.map(row => [row.name, row.parent, row.glyph]),
+  [['a.txt', 'Docs', '↑'], ['New', 'Docs', '+'], ['b.txt', 'Synced folder', '↓']]);
+assert.deepEqual(model.waitingRows(null, 3), []);
+assert.equal(model.waitingMore(117, 3), '+ 114 more');
+assert.equal(model.waitingMore(3, 3), '');
+
 console.log('Model flatten checks passed');

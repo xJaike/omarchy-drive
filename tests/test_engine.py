@@ -27,6 +27,7 @@ class MemoryDrive:
         self.before_download = None
         self.root_exists = True
         self.unusable = {}
+        self.listing = lambda path: None
 
     def put(self, path, data, file_id=None):
         self.serial += 1
@@ -40,8 +41,11 @@ class MemoryDrive:
             raise Blocked('Remote root is missing')
         if skipped is not None:
             skipped.update(self.unusable)
-        return {path: {k: v for k, v in item.items() if k != 'content'} for path, item in self.files.items()
-                if included is None or included(path)}
+        listed = {path: {k: v for k, v in item.items() if k != 'content'} for path, item in self.files.items()
+                  if included is None or included(path)}
+        for path in listed:
+            self.listing(path)
+        return listed
 
     def mkdir(self, parent, name, key):
         self.serial += 1
@@ -362,6 +366,14 @@ class EngineTests(unittest.TestCase):
         skipped = {}
         scan_local(self.local, 'Sync/', lambda path: not path.startswith('Sync/skip'), skipped)
         self.assertEqual(list(skipped), ['Sync/keep/bad'])
+
+    def test_scan_local_reports_each_file_before_reading_it_and_nothing_pruned(self):
+        self.write('keep/a.txt', b'a')
+        self.write('b.txt', b'b')
+        self.write('skip/c.txt', b'c')
+        seen = []
+        scan_local(self.local, 'Sync/', lambda path: not path.startswith('Sync/skip'), progress=seen.append)
+        self.assertEqual(sorted(seen), ['Sync/b.txt', 'Sync/keep/a.txt'])
 
     def test_store_identity_is_the_drive_folder_only(self):
         self.engine().snapshot()

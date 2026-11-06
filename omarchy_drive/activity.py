@@ -72,9 +72,18 @@ def summary_line(data):
     return ' · '.join(parts)
 
 
+def checking_lines(checking):
+    if not checking:
+        return []
+    side = 'your files' if checking.get('side') == 'local' else 'Google Drive'
+    return [f'Checking {side} · {checking.get("count", 0):,} checked', safe(checking.get('path', ''))]
+
+
 def detail_lines(data, queue_limit=5, recent_limit=5):
     current = data.get('current')
     lines = ['CURRENT FILE', *current_lines(current), ''] if current else []
+    if data.get('checking'):
+        lines += [*checking_lines(data['checking']), '']
     if data.get('total'):
         lines.append(f'Changes: {data.get("completed", 0)}/{data["total"]} · {data.get("pending", 0)} remaining')
     lines.append(summary_line(data))
@@ -146,7 +155,7 @@ class Activity:
 
     def start(self):
         self.started = True
-        self.data.update(current=None, queue=[], pending=0, queued=0, active=None, total=0, completed=0,
+        self.data.update(current=None, checking=None, queue=[], pending=0, queued=0, active=None, total=0, completed=0,
                          phase='scanning', started=time.time(), finished=None, last_error=None, blockedPath=None,
                          summary=dict(uploaded=0, downloaded=0, conflicts=0, removed=0, folders=0))
         self.write(message='Checking local files and Google Drive…')
@@ -162,9 +171,19 @@ class Activity:
         elif not target.exists() or target.read_bytes() != text.encode():
             atomic_text(target, text)
 
+    def checked(self, side, path):
+        """Note the item a scan is about to check. side is 'local' or 'drive'; a long scan writes about four times a second."""
+        if not self.started:
+            return  # preview scans too, and writes no status.
+        checking = self.data.get('checking')
+        count = checking['count'] + 1 if checking and checking.get('side') == side else 1
+        self.data['checking'] = dict(side=side, path=path, count=count)
+        if self.clock() - self.last_write >= .25:
+            self.write()
+
     def planned(self, actions):
         self.waiting = [{'action': a.kind, 'path': a.path} for a in actions]
-        self.data.update(total=len(actions), pending=len(actions), queued=len(actions), queue=self.waiting[:20], phase='syncing')
+        self.data.update(checking=None, total=len(actions), pending=len(actions), queued=len(actions), queue=self.waiting[:20], phase='syncing')
         self.write(message=f'Syncing {len(actions)} changes')
 
     def begin(self, action):
@@ -231,7 +250,7 @@ class Activity:
         self.write(message=f'Syncing · {self.data["completed"]}/{self.data["total"]} changes complete')
 
     def finish(self):
-        self.data.update(phase='finished', current=None, active=None, queue=[], pending=0, queued=0, finished=time.time())
+        self.data.update(phase='finished', current=None, checking=None, active=None, queue=[], pending=0, queued=0, finished=time.time())
         changed = bool(self.data.get('total'))
         skipped = self.data.get('skippedCount', 0)
         if changed:
@@ -247,7 +266,7 @@ class Activity:
         self.data['blockedPath'] = path
         if active:
             self.add_recent(active['action'], active['path'], state='failed')
-        self.data.update(phase='interrupted' if kind == 'interrupted' else 'failed', last_error=message, finished=time.time())
+        self.data.update(phase='interrupted' if kind == 'interrupted' else 'failed', last_error=message, finished=time.time(), checking=None)
         if self.data.get('current'):
             self.data['current']['state'] = 'failed'
         self.write(kind, message)

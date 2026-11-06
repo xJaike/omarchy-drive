@@ -174,9 +174,15 @@ and shortcuts remain available in the browser and are skipped in offline sync.
 
 ## Recent files and transfers
 
-The current transfer has a separate progress card with direction, filename,
-parent folder, percentage, transferred bytes, speed and ETA. Backup transfers
-are identified separately from uploads and downloads.
+While a sync checks for changes, the panel shows which file it is reading and a
+running count, first for your files and then for Google Drive.
+
+While it syncs, the heading shows its place in the plan, such as **Syncing · 4 of
+120**. The current file has a progress card with direction, filename, parent
+folder, percentage, transferred bytes, speed and ETA; a step with nothing to
+transfer, such as creating a folder, shows what it is doing instead. Backup
+transfers are identified separately from uploads and downloads. The next three
+files are listed below the card as **Waiting**, followed by how many more remain.
 
 Recent files show their latest activity in individual rows: filename, parent
 folder, status and relative time. Long names are elided in the middle; hover

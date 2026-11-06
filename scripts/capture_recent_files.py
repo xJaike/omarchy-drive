@@ -30,7 +30,7 @@ def geometry(value):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, default=ROOT/'docs/images/recent-files.png')
-    parser.add_argument('--state', choices=('uploading','attention','empty'), default='uploading')
+    parser.add_argument('--state', choices=('uploading','folder','checking','attention','empty'), default='uploading')
     parser.add_argument('--palette', choices=('current', 'light', 'dark'), default='current', help='Isolated theme preview; does not change the desktop theme')
     args = parser.parse_args()
     for tool in ('quickshell','hyprctl','grim'):

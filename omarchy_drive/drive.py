@@ -57,6 +57,7 @@ class Drive:
     def __init__(self, http, store, state, progress=None):
         self.http, self.store, self.state = http, store, Path(state)
         self.progress = progress or (lambda *args: None)
+        self.listing = lambda path: None  # Called with each item scan lists.
 
     def get(self, file_id):
         value, _ = self.http.json('GET', query_url(API + 'files/' + encode(file_id), fields=FIELDS), retry=True)
@@ -129,6 +130,7 @@ class Drive:
                     raise Blocked(f'Drive did not return a checksum for {path}. Sync stopped before changes.')
                 result[path] = dict(item, kind='dir' if folder else 'unsupported' if unsupported else 'file',
                                     hash=item.get('md5Checksum'), size=int(item.get('size', 0)))
+                self.listing(path)
                 if folder:
                     if item['id'] in visited:
                         raise Blocked('Google Drive returned a folder cycle.')

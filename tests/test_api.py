@@ -71,6 +71,18 @@ class APITests(unittest.TestCase):
         self.assertEqual(set(result), {'sub', 'a.txt'})
         self.assertIn('pageToken=page-2', self.http.calls[2][1])
 
+    def test_scan_reports_each_listed_item(self):
+        child = dict(id='folder', name='sub', mimeType=FOLDER)
+        drive = self.adapter([
+            json_response({'id': 'root', 'mimeType': FOLDER}),
+            json_response({'files': [child, self.item]}),
+            json_response({'files': []}),
+        ])
+        seen = []
+        drive.listing = seen.append
+        drive.scan('root')
+        self.assertEqual(sorted(seen), ['a.txt', 'sub'])
+
     def test_incomplete_or_duplicate_listing_blocks(self):
         for body in ({'incompleteSearch': True, 'files': []}, {'files': [self.item, self.item]}):
             drive = self.adapter([json_response({'mimeType': FOLDER}), json_response(body)])

@@ -107,6 +107,46 @@ class ActivityTests(unittest.TestCase):
         self.assertEqual(data['queued'], 99)
         self.assertIn('+ 94 more changes', detail_lines(data, queue_limit=5))
 
+    def test_checking_reports_the_path_and_count_and_clears_when_planned(self):
+        self.activity.start()
+        self.activity.checked('local', 'Work/a.txt')
+        self.now = 1
+        self.activity.checked('local', 'Work/b.txt')
+        data = read_json(self.paths.status)
+        self.assertEqual(data['checking'], {'side': 'local', 'path': 'Work/b.txt', 'count': 2})
+        self.assertIn('Checking your files · 2 checked', detail_lines(data))
+        self.assertIn('Work/b.txt', detail_lines(data))
+        self.activity.checked('drive', 'Work')
+        self.assertEqual(self.activity.data['checking'], {'side': 'drive', 'path': 'Work', 'count': 1})
+        self.assertIn('Checking Google Drive · 1 checked', detail_lines(self.activity.data))
+        self.activity.planned([])
+        self.assertIsNone(read_json(self.paths.status)['checking'])
+
+    def test_checking_writes_at_most_four_times_a_second(self):
+        self.activity.start()
+        with patch.object(self.paths, 'record', wraps=self.paths.record) as record:
+            for i in range(100):
+                self.activity.checked('local', f'{i}.txt')
+            self.assertEqual(record.call_count, 0)
+            self.now = .3
+            self.activity.checked('local', 'last.txt')
+            self.assertEqual(record.call_count, 1)
+        self.assertEqual(read_json(self.paths.status)['checking']['count'], 101)
+
+    def test_checking_outside_a_sync_writes_nothing(self):
+        # preview scans with an Activity it never starts, and must leave the status file alone.
+        self.now = 10
+        self.activity.checked('local', 'a.txt')
+        self.assertFalse(self.paths.status.exists())
+
+    def test_finishing_failing_or_restarting_clears_checking(self):
+        for end in (self.activity.finish, lambda: self.activity.failure('offline', 'Offline'), self.activity.start):
+            self.activity.start()
+            self.now += 1
+            self.activity.checked('local', 'a.txt')
+            end()
+            self.assertIsNone(read_json(self.paths.status)['checking'])
+
     def test_resumed_bytes_do_not_inflate_transfer_speed(self):
         self.activity.start()
         self.activity.phase('download', 'large.zip', 1000)
@@ -118,9 +158,12 @@ class ActivityTests(unittest.TestCase):
     def test_stale_running_state_never_claims_an_active_transfer(self):
         self.activity.start()
         self.activity.phase('download', 'old.txt', 100)
+        self.now += 1
+        self.activity.checked('local', 'old.txt')
         displayed = status(self.paths)
         self.assertEqual(displayed['kind'], 'interrupted')
         self.assertIsNone(displayed['current'])
+        self.assertIsNone(displayed['checking'])
         self.assertNotIn('Downloading: old.txt', displayed['tooltip'])
 
     def test_legacy_history_appears_in_hover_before_next_sync(self):
@@ -195,6 +238,21 @@ class BlockedPathFromCommandTests(unittest.TestCase):
         with patch('omarchy_drive.cli.migrate', side_effect=Blocked('m', path='Work/a')):
             self.assertEqual(self.sync(), 1)
         self.assertEqual(read_json(self.paths.status)['blockedPath'], 'Work/a')
+
+    def test_sync_reports_each_item_it_checks_on_both_sides(self):
+        (self.home/'Work'/'a.txt').write_bytes(b'a')
+        self.drive.files['Work'] = {'id': 'folder-Work', 'kind': 'dir', 'hash': None, 'name': 'Work'}
+        self.drive.put('Work/b.txt', b'b')
+        calls = []
+        original = Activity.checked
+        def spy(activity, side, path):
+            calls.append((side, path))
+            return original(activity, side, path)
+        with patch.object(Activity, 'checked', spy):
+            self.assertEqual(self.sync(), 0)
+        self.assertIn(('local', 'Work/a.txt'), calls)
+        self.assertIn(('drive', 'Work/b.txt'), calls)
+        self.assertIsNone(read_json(self.paths.status)['checking'])
 
     def test_next_sync_clears_the_path(self):
         self.clash()

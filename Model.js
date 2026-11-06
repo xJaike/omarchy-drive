@@ -344,3 +344,53 @@ function wrappedPath(value) {
 }
 if (typeof module !== "undefined") Object.assign(module.exports, {transferEta:transferEta, wrappedPath:wrappedPath,
   skippedHeading:skippedHeading, skippedMore:skippedMore})
+
+// Sync progress: what the check phase is on, where the sync is in its plan, and what waits.
+function groupDigits(value) {
+  return String(Math.max(0, Math.floor(Number(value) || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+}
+
+function checkingHeading(checking) {
+  var side = checking && checking.side === "local" ? "YOUR FILES" : "GOOGLE DRIVE"
+  return "CHECKING " + side + " · " + groupDigits(checking ? checking.count : 0) + " CHECKED"
+}
+
+function syncHeading(total, completed) {
+  total = Number(total || 0)
+  if (total <= 0) return "ACTIVE TRANSFER"
+  return "SYNCING · " + groupDigits(Math.min(total, Number(completed || 0) + 1)) + " OF " + groupDigits(total)
+}
+
+// The action decides the arrow: a conflict downloads, and an upload first backs up the Drive copy.
+function activeGlyph(active, current) {
+  var action = active && active.action
+  if (action === "mkdir-local" || action === "mkdir-remote") return "folder-open"
+  if (action === "download" || action === "conflict" || action === "archive-local") return "circle-arrow-down"
+  if (action === "upload" || action === "trash-remote") return "circle-arrow-up"
+  var direction = current && current.direction
+  if (direction === "download") return "circle-arrow-down"
+  if (direction === "upload") return "circle-arrow-up"
+  return "rotate-cw"
+}
+
+function hasBytes(current) {
+  return !!current && Number(current.total || 0) > 0
+}
+
+function waitingRows(queue, limit) {
+  return (Array.isArray(queue) ? queue : []).filter(function(item) {
+    return item && item.path
+  }).slice(0, limit).map(function(item) {
+    return {path: item.path, name: fileName(item.path), parent: parentPath(item.path),
+      glyph: activityGlyph(item.action, false)}
+  })
+}
+
+function waitingMore(queued, shown) {
+  var more = Number(queued || 0) - Number(shown || 0)
+  return more > 0 ? "+ " + groupDigits(more) + " more" : ""
+}
+
+if (typeof module !== "undefined") Object.assign(module.exports, {groupDigits: groupDigits,
+  checkingHeading: checkingHeading, syncHeading: syncHeading, activeGlyph: activeGlyph, hasBytes: hasBytes,
+  waitingRows: waitingRows, waitingMore: waitingMore})

@@ -52,8 +52,9 @@ def local_path(root, relative):
     return path
 
 
-def scan_local(root, prefix='', included=None, skipped=None):
-    """List the folder's files. An item that cannot sync goes into skipped, with why, and is left out."""
+def scan_local(root, prefix='', included=None, skipped=None, progress=None):
+    """List the folder's files. An item that cannot sync goes into skipped, with why, and is left out.
+    progress, if given, is called with each file's path before the file is read."""
     skipped = {} if skipped is None else skipped
     root = Path(root)
     if root.is_symlink() or not root.is_dir() or os.path.ismount(root):
@@ -85,6 +86,8 @@ def scan_local(root, prefix='', included=None, skipped=None):
                     else:
                         result[relative] = {'kind': 'dir'}
                 elif stat.S_ISREG(info.st_mode):
+                    if progress:
+                        progress(relative)
                     checksum = digest(path)
                     after = path.stat()
                     if (info.st_size, info.st_mtime_ns, info.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
@@ -175,6 +178,7 @@ class Engine:
         self.skipped, self.stale = {}, []
         self.activity = activity or Activity(paths)
         self.drive.progress = self.activity.transfer
+        self.drive.listing = lambda path: self.activity.checked('drive', path)
 
     def home_source(self, path):
         first = path.partition('/')[0]
@@ -207,7 +211,8 @@ class Engine:
                 continue  # Drive-only, so plan emits mkdir-local.
             if included(name):
                 self.local[name] = {'kind': 'dir'}
-                self.local.update(scan_local(source, name + '/', included, problems))
+                self.local.update(scan_local(source, name + '/', included, problems,
+                                             lambda path: self.activity.checked('local', path)))
         # Build complete listings before any local or cloud mutation.
         self.remote = self.drive.scan(self.settings['folder_id'], included, unusable)
         for name in sources:

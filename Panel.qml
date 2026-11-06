@@ -440,6 +440,12 @@ Panel {
             urgent: root.urgent
             fontFamily: root.fontFamily
             current: drive.currentTransfer
+            checking: drive.checkingInfo
+            active: drive.activeAction
+            queue: drive.syncQueue
+            total: drive.syncTotal
+            completed: drive.syncCompleted
+            queued: drive.syncQueued
             entries: drive.recentFiles
             remaining: drive.remainingChanges
             retryEnabled: drive.lastResult === "error" && !drive.busy && !drive.syncing && drive.installed

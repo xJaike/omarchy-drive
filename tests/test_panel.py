@@ -776,6 +776,26 @@ class StatusTests(PanelCase):
         self.assertEqual(value['skipped'], rows)
         self.assertEqual(value['skippedCount'], 3)
 
+    def test_status_carries_sync_progress_while_running(self):
+        (self.home / 'Work').mkdir()
+        self.tick('Work')
+        checking = {'side': 'local', 'path': 'Work/a.txt', 'count': 2}
+        queue = [{'action': 'upload', 'path': 'Work/b.txt'}]
+        active = {'action': 'upload', 'path': 'Work/a.txt'}
+        self.paths.record('running', 'Syncing', total=120, completed=3, checking=checking, queue=queue, queued=117, active=active)
+        with self.paths.lock():
+            value = panel.status(self.paths)
+        self.assertEqual(value['active'], active)
+        self.assertEqual((value['total'], value['completed'], value['queued']), (120, 3, 117))
+        self.assertEqual(value['checking'], checking)
+        self.assertEqual(value['queue'], queue)
+
+    def test_status_drops_checking_once_not_running(self):
+        self.paths.record('success', 'Up to date', checking={'side': 'local', 'path': 'a', 'count': 1}, active={'action': 'upload', 'path': 'a'})
+        value = panel.status(self.paths)
+        self.assertIsNone(value['checking'])
+        self.assertIsNone(value['active'])
+
     def test_status_with_no_sync_yet_has_an_empty_list(self):
         value = panel.status(self.paths)
         self.assertEqual(value['skipped'], [])

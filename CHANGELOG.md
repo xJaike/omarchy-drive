@@ -22,6 +22,10 @@ something is ticked.
   `omarchy-drive preview`.
 - A problem a skip cannot settle offers **Exclude this**, or **Untick this** for a
   ticked folder. The panel never does either by itself.
+- The panel shows sync progress per file. While checking, it names the file being
+  read with a running count. While syncing, it shows **Syncing · 4 of 120**, the
+  current file's progress, and the next three files as **Waiting**. Creating a
+  folder no longer shows an empty 0 B progress bar.
 - A ticked folder is no longer reported as replaced after a reboot. Its identity
   used the device number, which btrfs assigns at mount time, so a sync interrupted
   by a shutdown needed the folder unticked and ticked again. The identity is now the

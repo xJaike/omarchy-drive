@@ -18,6 +18,12 @@ Item {
   property string detailsTooltip: "Checking Google Drive…"
   property string activityText: ""
   property var currentTransfer: null
+  property var checkingInfo: null
+  property var activeAction: null
+  property var syncQueue: []
+  property int syncTotal: 0
+  property int syncCompleted: 0
+  property int syncQueued: 0
   property var recentFiles: []
   property int remainingChanges: 0
   property var skippedFiles: []
@@ -92,6 +98,13 @@ Item {
     detailsTooltip = value.detailsTooltip || statusText
     activityText = value.activityText || ""
     currentTransfer = syncing ? (value.current || null) : null
+    checkingInfo = syncing ? (value.checking || null) : null
+    activeAction = syncing ? (value.active || null) : null
+    var queue = syncing && Array.isArray(value.queue) ? value.queue : []
+    if (JSON.stringify(queue) !== JSON.stringify(syncQueue)) syncQueue = queue
+    syncTotal = syncing ? Number(value.total || 0) : 0
+    syncCompleted = syncing ? Number(value.completed || 0) : 0
+    syncQueued = syncing ? Number(value.queued || 0) : 0
     remainingChanges = Number(value.pending || 0)
     var recent = Array.isArray(value.recent) ? value.recent : []
     if (JSON.stringify(recent) !== JSON.stringify(recentFiles)) recentFiles = recent

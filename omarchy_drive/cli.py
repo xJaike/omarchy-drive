@@ -152,7 +152,7 @@ def status(paths):
         # A stale status after a crash must not appear as an active transfer.
         try:
             with paths.lock():
-                data.update(kind='interrupted', message='Previous sync was interrupted. Run sync to resume.', current=None)
+                data.update(kind='interrupted', message='Previous sync was interrupted. Run sync to resume.', current=None, checking=None)
         except Blocked:
             pass
     labels = {'setup': 'Drive setup', 'auth': 'Drive sign-in', 'offline': 'Drive offline',
