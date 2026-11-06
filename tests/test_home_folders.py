@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from omarchy_drive.drive import digest
 from omarchy_drive.engine import Engine
-from omarchy_drive.home_folders import choices, mappings, record_identity, select, set_excluded, validate
+from omarchy_drive.home_folders import choices, identity_of, mappings, record_identity, select, set_excluded, validate
 from omarchy_drive.panel import reveal
 from omarchy_drive.storage import Paths, Store, Blocked, Offline, atomic_json
 from tests.test_engine import MemoryDrive, md5
@@ -132,6 +132,34 @@ class HomeFolderTests(HomeFolderCase):
         self.documents.mkdir()
         self.assert_folder_problem(self.engine().sync, '~/Documents was replaced. Untick it and tick it again to merge safely.')
         self.assertEqual(self.drive.files['Documents/report.txt']['content'], b'safe')
+
+    def test_a_reboot_that_renumbers_the_device_resumes_without_unticking(self):
+        # btrfs hands out st_dev at mount time, so the same folder can come back with a new one after a reboot.
+        (self.documents/'report.txt').write_text('safe')
+        self.enable()
+        self.engine().sync()
+        info = self.documents.stat()
+        self.settings(home_folders={'Documents': {'identity': [info.st_dev + 1, info.st_ino]}})
+        (self.documents/'after.txt').write_text('new')
+        self.engine().sync()
+        self.assertEqual(self.drive.files['Documents/after.txt']['content'], b'new')
+        self.assertFalse(list(self.documents.glob('*.conflict-*')))
+        self.assertEqual(self.paths.configured()['home_folders']['Documents'], {'identity': identity_of(self.documents)})
+        self.assertEqual(self.engine().sync(), [])
+
+    def test_recorded_identity_does_not_depend_on_the_device_number(self):
+        settings = {}
+        record_identity(settings, 'Documents', self.documents)
+        identity = settings['home_folders']['Documents']['identity']
+        self.assertEqual(identity, {'fs': os.statvfs(self.documents).f_fsid, 'inode': self.documents.stat().st_ino})
+        self.assertNotIn(self.documents.stat().st_dev, identity.values())
+
+    def test_preview_does_not_rewrite_an_older_identity(self):
+        info = self.documents.stat()
+        self.settings(home_folders={'Documents': {'identity': [info.st_dev + 1, info.st_ino]}})
+        before = self.paths.settings.read_bytes()
+        self.engine().snapshot()
+        self.assertEqual(self.paths.settings.read_bytes(), before)
 
     def test_ticking_something_that_is_not_a_folder_never_says_restore_alone(self):
         (self.home/'file.txt').write_text('a file')
@@ -513,8 +541,7 @@ class HomeFolderTests(HomeFolderCase):
         self.engine().sync()
         archive = self.home/'Archive'
         self.assertEqual((archive/'x.txt').read_bytes(), b'x')
-        info = archive.stat()
-        self.assertEqual(self.paths.configured()['home_folders']['Archive'], {'identity': [info.st_dev, info.st_ino]})
+        self.assertEqual(self.paths.configured()['home_folders']['Archive'], {'identity': identity_of(archive)})
         self.assertEqual(self.engine().sync(), [])
 
     def test_drive_only_folder_replaced_after_creation_is_blocked(self):
@@ -573,8 +600,7 @@ class HomeFolderTests(HomeFolderCase):
         self.engine().sync()
         self.assertEqual((archive/'cloud.txt').read_bytes(), b'cloud')
         self.assertEqual(self.drive.files['Archive/local.txt']['content'], b'local')
-        info = archive.stat()
-        self.assertEqual(self.paths.configured()['home_folders']['Archive'], {'identity': [info.st_dev, info.st_ino]})
+        self.assertEqual(self.paths.configured()['home_folders']['Archive'], {'identity': identity_of(archive)})
         # The recorded identity is what makes a later replacement a stop rather than mass deletion.
         archive.rename(self.home/'moved')
         archive.mkdir()
@@ -627,8 +653,7 @@ class HomeFolderTests(HomeFolderCase):
         self.settings(home_folders={'Documents': {}})
         (self.documents/'a.txt').write_bytes(b'a')
         self.engine().sync()
-        info = self.documents.stat()
-        self.assertEqual(self.paths.configured()['home_folders']['Documents'], {'identity': [info.st_dev, info.st_ino]})
+        self.assertEqual(self.paths.configured()['home_folders']['Documents'], {'identity': identity_of(self.documents)})
         self.assertEqual(self.drive.files['Documents/a.txt']['content'], b'a')
 
     def test_entry_without_identity_never_deletes_from_stale_history(self):
@@ -781,8 +806,7 @@ class HomeFolderTests(HomeFolderCase):
     def test_record_identity_on_a_settings_dict(self):
         settings = {}
         record_identity(settings, 'Documents', self.documents)
-        info = self.documents.stat()
-        self.assertEqual(settings, {'home_folders': {'Documents': {'identity': [info.st_dev, info.st_ino]}}})
+        self.assertEqual(settings, {'home_folders': {'Documents': {'identity': identity_of(self.documents)}}})
         json.dumps(settings)
 
     def test_choices_keep_a_problem_row_visible_with_its_reason(self):
@@ -881,8 +905,7 @@ class NoOpSelectionTests(HomeFolderCase):
         self.store.remember('Documents/old', {'id': 'x', 'hash': 'y'})
         self.cache(Documents='both')
         self.enable()
-        info = self.documents.stat()
-        self.assertEqual(self.paths.configured()['home_folders'], {'Documents': {'identity': [info.st_dev, info.st_ino]}})
+        self.assertEqual(self.paths.configured()['home_folders'], {'Documents': {'identity': identity_of(self.documents)}})
         self.assertEqual(self.store.baseline(), {})
         self.assertFalse((self.paths.state/'panel-cache.json').exists())
 

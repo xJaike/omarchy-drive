@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from omarchy_drive.drive import FOLDER
 from omarchy_drive.engine import Engine, UNREADABLE, plan, scan_local
-from omarchy_drive.home_folders import record_identity
+from omarchy_drive.home_folders import identity_of, record_identity
 from omarchy_drive.storage import Blocked, Offline, Paths, Store, read_json
 
 
@@ -408,9 +408,8 @@ class EngineTests(unittest.TestCase):
     def test_identity_is_recorded_when_the_sync_commits_to_the_merge(self):
         self.settings['home_folders']['Sync'] = {}
         self.engine().sync()
-        info = self.local.stat()
-        self.assertEqual(self.settings['home_folders']['Sync'], {'identity': [info.st_dev, info.st_ino]})
-        self.assertEqual(read_json(self.paths.settings)['home_folders']['Sync'], {'identity': [info.st_dev, info.st_ino]})
+        self.assertEqual(self.settings['home_folders']['Sync'], {'identity': identity_of(self.local)})
+        self.assertEqual(read_json(self.paths.settings)['home_folders']['Sync'], {'identity': identity_of(self.local)})
 
     def run_with_unreadable(self, path, mode=0):
         target = self.local / path

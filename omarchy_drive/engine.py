@@ -12,7 +12,7 @@ import uuid
 from .drive import GOOGLE_DOC, digest
 from .activity import Activity
 from .selection import IGNORED, includes, under_any
-from .home_folders import mappings, record_identity
+from .home_folders import mappings, needs_new_identity, record_identity
 from .gitignore import selection
 from .storage import Blocked, atomic_json
 
@@ -245,6 +245,8 @@ class Engine:
             self.store.forget_subtree(name)
         sources = mappings(self.settings, self.paths)
         found = [name for name in self.merging if sources[name].exists()]
+        found += [name for name, entry in self.settings.get('home_folders', {}).items()
+                  if name not in self.merging and needs_new_identity((entry or {}).get('identity'), sources[name])]
         for name in found:
             record_identity(self.settings, name, sources[name])
         if found:

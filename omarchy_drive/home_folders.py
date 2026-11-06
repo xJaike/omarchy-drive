@@ -29,9 +29,27 @@ def validate(name, entry, paths):
     # archive_source moves originals into the backup directory with os.rename.
     if info.st_dev != paths.state.stat().st_dev:
         raise Blocked('Home folders must be on the same disk as the app state folder, because backups move files there.')
-    if identity is not None and [info.st_dev, info.st_ino] != identity:
+    if identity is not None and not same_folder(identity, source):
         raise Blocked(f'~/{name} was replaced. Untick it and tick it again to merge safely.')
     return source
+
+
+def identity_of(source):
+    """The filesystem ID and inode of a folder. Not st_dev: btrfs assigns that at mount, so it changes across reboots."""
+    return {'fs': os.statvfs(source).f_fsid, 'inode': Path(source).stat().st_ino}
+
+
+def same_folder(identity, source):
+    current = identity_of(source)
+    if isinstance(identity, list) and len(identity) == 2:
+        # The older [st_dev, st_ino] form. Its device number may have changed since, so only the inode can decide.
+        return identity[1] == current['inode']
+    return identity == current
+
+
+def needs_new_identity(identity, source):
+    """True for an identity that names this folder in the older form, which sync then rewrites."""
+    return identity is not None and same_folder(identity, source) and identity != identity_of(source)
 
 
 def mappings(settings, paths):
@@ -56,8 +74,7 @@ def choices(settings, paths):
 
 
 def record_identity(settings, name, source):
-    info = Path(source).stat()
-    settings.setdefault('home_folders', {})[name] = {'identity': [info.st_dev, info.st_ino]}
+    settings.setdefault('home_folders', {})[name] = {'identity': identity_of(source)}
 
 
 def listed_only_on_drive(paths, name):

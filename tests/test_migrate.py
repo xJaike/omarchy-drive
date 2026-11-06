@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from omarchy_drive.engine import Engine
+from omarchy_drive.home_folders import identity_of
 from omarchy_drive.migrate import migrate
 from omarchy_drive import panel
 from omarchy_drive.storage import Blocked, Paths, Store, atomic_json
@@ -31,10 +32,9 @@ class MigrateTests(unittest.TestCase):
         self.work = self.home/'Work'
         self.work.mkdir()
         (self.work/'a.txt').write_text('a')
-        info = self.work.stat()
         self.old = {'local_dir': str(self.local), 'folder_id': 'root', 'folder_name': 'Omarchy', 'max_deletes': 20,
                     'selected_folders': ['Work'], 'root_files': True,
-                    'home_folders': {'Work': {'identity': [info.st_dev, info.st_ino]}}}
+                    'home_folders': {'Work': {'identity': identity_of(self.work)}}}
         atomic_json(self.paths.settings, self.old)
         self.drive = MemoryDrive()
         self.drive.put('Work/a.txt', b'a')
