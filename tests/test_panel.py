@@ -109,6 +109,30 @@ class PanelCase(unittest.TestCase):
 
 
 class FolderTests(PanelCase):
+    def test_size_inventory_obeys_budget_for_empty_directories(self):
+        root = self.home / 'Work'
+        (root / 'empty').mkdir(parents=True)
+        with patch('omarchy_drive.panel.time.monotonic', side_effect=[0, 2]):
+            sizes, counts, approximate = panel.disk_inventory(root, budget=1)
+        self.assertEqual((sizes, counts, approximate), ({}, {}, True))
+
+    def test_folder_size_estimates_share_one_total_budget(self):
+        names = [f'Folder{i}' for i in range(20)]
+        for name in names:
+            (self.home / name).mkdir()
+        elapsed = [0]
+        def inventory(source, budget):
+            elapsed[0] += 0.25
+            return {'': 5}, {'': 1}, True
+        old = {'folders': [{'name': name, 'localBytes': 42} for name in names]}
+        with patch('omarchy_drive.panel.time.monotonic', side_effect=lambda: elapsed[0]), \
+                patch('omarchy_drive.panel.disk_inventory', side_effect=inventory) as scan:
+            result = panel.folder_list(self.paths.configured(), self.paths, set(), True, old)
+        self.assertEqual(scan.call_count, 4)
+        reused = [row for row in result['folders'] if row['localBytes'] == 42]
+        self.assertEqual(len(reused), 16)
+        self.assertTrue(all(row['approx'] for row in reused))
+
     def rows(self, listings=None):
         with self.drive(listings):
             value = panel.folders(self.paths)

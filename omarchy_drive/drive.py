@@ -3,6 +3,8 @@
 Everything uses v3 except writes to existing files. v3 neither returns ETags nor
 enforces If-Match, so overwrite and trash go through v2, which does both.
 """
+from concurrent.futures import ThreadPoolExecutor
+from collections import deque
 import hashlib
 import http.client
 import json
@@ -101,41 +103,48 @@ class Drive:
         root = self.get(folder_id)
         if root.get('trashed') or root.get('mimeType') != FOLDER:
             raise Blocked('The configured Google Drive folder is missing or in Trash. Restore it before syncing.')
-        result, pending, visited = {}, [('', folder_id)], {folder_id}
-        while pending:
-            prefix, parent = pending.pop()
-            children = list(self.children(parent))
-            if hasattr(included, 'prepare'):
-                included.prepare([(f'{prefix}/{item["name"]}' if prefix else item['name'], item['mimeType'] == FOLDER)
-                                  for item in children if usable_name(item['name'])])
-            for item in children:
-                path = f'{prefix}/{item["name"]}' if prefix else item['name']
-                # Checked before the selection and kept out of the listing, because a "/" would fake a deeper path.
-                # Loose top-level items never sync, so there is nothing to report about them.
-                if not usable_name(item['name']):
-                    if prefix and skipped is not None:
-                        skipped[path] = BAD_NAME
-                    continue
-                # Pruned paths are never validated, so problems inside them cannot block a sync.
-                if included is not None and not (included(path, item['mimeType'] == FOLDER)
-                                                 if hasattr(included, 'prepare') else included(path)):
-                    continue
-                if item['name'].startswith('.omarchy-drive-tmp-'):
-                    raise Blocked(safe(f'A Drive file uses the app temporary-file prefix: {path}. Rename it before syncing.'), path=path)
-                if path in result:
-                    raise Blocked(f'Duplicate Drive names at {path}. Rename the duplicates before syncing.', path=path)
-                folder = item['mimeType'] == FOLDER
-                unsupported = item['mimeType'].startswith('application/vnd.google-apps.') and not folder
-                if not folder and not unsupported and not item.get('md5Checksum'):
-                    raise Blocked(f'Drive did not return a checksum for {path}. Sync stopped before changes.')
-                result[path] = dict(item, kind='dir' if folder else 'unsupported' if unsupported else 'file',
-                                    hash=item.get('md5Checksum'), size=int(item.get('size', 0)))
-                self.listing(path)
-                if folder:
-                    if item['id'] in visited:
-                        raise Blocked('Google Drive returned a folder cycle.')
-                    visited.add(item['id'])
-                    pending.append((path, item['id']))
+        result, pending, visited = {}, deque([('', folder_id)]), {folder_id}
+        # Fetch independent folder listings concurrently; selection, validation and
+        # progress remain on this thread. Bound outstanding work on wide trees.
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix='drive-list') as pool:
+            fetching = deque()
+            while pending or fetching:
+                while pending and len(fetching) < 4:
+                    prefix, parent = pending.popleft()
+                    fetching.append((prefix, pool.submit(lambda parent=parent: list(self.children(parent)))))
+                prefix, future = fetching.popleft()
+                children = future.result()
+                if hasattr(included, 'prepare'):
+                    included.prepare([(f'{prefix}/{item["name"]}' if prefix else item['name'], item['mimeType'] == FOLDER)
+                                      for item in children if usable_name(item['name'])])
+                for item in children:
+                    path = f'{prefix}/{item["name"]}' if prefix else item['name']
+                    # Checked before the selection and kept out of the listing, because a "/" would fake a deeper path.
+                    # Loose top-level items never sync, so there is nothing to report about them.
+                    if not usable_name(item['name']):
+                        if prefix and skipped is not None:
+                            skipped[path] = BAD_NAME
+                        continue
+                    # Pruned paths are never validated, so problems inside them cannot block a sync.
+                    if included is not None and not (included(path, item['mimeType'] == FOLDER)
+                                                     if hasattr(included, 'prepare') else included(path)):
+                        continue
+                    if item['name'].startswith('.omarchy-drive-tmp-'):
+                        raise Blocked(safe(f'A Drive file uses the app temporary-file prefix: {path}. Rename it before syncing.'), path=path)
+                    if path in result:
+                        raise Blocked(f'Duplicate Drive names at {path}. Rename the duplicates before syncing.', path=path)
+                    folder = item['mimeType'] == FOLDER
+                    unsupported = item['mimeType'].startswith('application/vnd.google-apps.') and not folder
+                    if not folder and not unsupported and not item.get('md5Checksum'):
+                        raise Blocked(f'Drive did not return a checksum for {path}. Sync stopped before changes.')
+                    result[path] = dict(item, kind='dir' if folder else 'unsupported' if unsupported else 'file',
+                                        hash=item.get('md5Checksum'), size=int(item.get('size', 0)))
+                    self.listing(path)
+                    if folder:
+                        if item['id'] in visited:
+                            raise Blocked('Google Drive returned a folder cycle.')
+                        visited.add(item['id'])
+                        pending.append((path, item['id']))
         return result
 
     def new_id(self):

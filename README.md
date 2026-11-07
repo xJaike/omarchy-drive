@@ -23,6 +23,34 @@ opens the panel; right-click refreshes it.
 *The actual `RecentFiles.qml` component rendered with sample files. No personal
 account or file history is shown.*
 
+## Fast repeat checks
+
+The first check reads local file contents to build a persistent checksum cache.
+Later checks reuse checksums when device, inode, size, modification time, change
+time and file mode match; edited or replaced files are hashed again. The cache
+is separate from sync history, so removing it only makes the next check slower.
+Overwrite and deletion safeguards still verify local contents before acting.
+Unchanged sync records no longer trigger individual database writes, and Drive
+folder listings run with up to four concurrent requests.
+
+Large folders use constant-time directory-name lookups, shared ancestors are
+checked once per ignore batch, and exclusions use a set of path prefixes.
+Files already recorded with matching local and cloud contents produce no sync
+actions. Only changed or removed checksum-cache rows are written to SQLite.
+Transfer progress keeps an ordered queue and reads only the next 20 visible
+items, instead of rebuilding the entire queue on every update.
+
+The panel uses directory-entry metadata for size estimates, skips nested mounts,
+and shares a one-second scanning budget across all home folders. Estimates that
+cannot finish within that budget are marked approximate; previous sizes are
+retained where available. This budget bounds traversal work, not slow system calls.
+
+Checks still walk selected local folders and list selected Drive folders each
+cycle; this is not yet a filesystem watcher or a Drive change-feed service.
+A local benchmark of 256 unchanged files totaling 256 MiB took 0.441 seconds with
+full hashing and 0.008 seconds with the cache (about 57× faster for the local
+scan). Actual gains depend on file sizes, folder count, disk and network latency.
+
 ## Full setup documentation
 
 Start with the [illustrated setup guide](docs/STANDALONE_SETUP.md). It covers

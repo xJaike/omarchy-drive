@@ -99,6 +99,25 @@ class BlockedPathTests(unittest.TestCase):
 
 
 class GitignoreTests(unittest.TestCase):
+    def test_sibling_batch_checks_shared_ancestors_once(self):
+        from omarchy_drive.gitignore import selection
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            (source / 'nested').mkdir()
+            settings = {'home_folders': {'Work': {}}, 'excluded': ['Work/nested/excluded']}
+            calls = []
+            original = Path.is_symlink
+            def is_symlink(path):
+                calls.append(path)
+                return original(path)
+            with selection(settings, {'Work': source}) as included:
+                with patch.object(Path, 'is_symlink', is_symlink):
+                    included.prepare([(f'Work/nested/{i}', False) for i in range(100)])
+                self.assertEqual(calls.count(source), 1)
+                self.assertEqual(calls.count(source / 'nested'), 1)
+                self.assertTrue(included('Work/nested/1'))
+                self.assertFalse(included('Work/nested/excluded/deeper'))
+
     def test_missing_historical_paths_are_checked_in_one_batch(self):
         from omarchy_drive.gitignore import selection
         from unittest.mock import patch

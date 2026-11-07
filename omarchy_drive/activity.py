@@ -4,6 +4,7 @@ import sqlite3
 import time
 import threading
 from functools import wraps
+from itertools import islice
 from .storage import atomic_text, read_json
 
 ACTION_LABELS = {
@@ -173,7 +174,7 @@ class Activity:
         self.data = read_json(paths.status)
         if 'recent' not in self.data:
             self.data['recent'] = recent_events(paths)
-        self.waiting = []
+        self.waiting = {}
         self.active = None
         self.sample = None
         self.last_write = float('-inf')
@@ -188,8 +189,9 @@ class Activity:
         self.data['transfers'] = running
         if self.data.get('phase') == 'syncing':
             active_paths = {item['path'] for item in running}
-            queue = [item for item in self.waiting if item['path'] not in active_paths]
-            self.data.update(queue=queue[:20], queued=len(queue))
+            queue = (item for path, item in self.waiting.items() if path not in active_paths)
+            queued = len(self.waiting) - sum(path in self.waiting for path in active_paths)
+            self.data.update(queue=list(islice(queue, 20)), queued=queued)
         self.data['kind'] = kind
         payload = dict(self.data)
         # A completed worker must not hide another transfer that is still active.
@@ -230,15 +232,15 @@ class Activity:
             self.write()
 
     def planned(self, actions):
-        self.waiting = [{'action': a.kind, 'path': a.path} for a in actions]
-        self.data.update(checking=None, total=len(actions), pending=len(actions), queued=len(actions), queue=self.waiting[:20], phase='syncing')
+        self.waiting = {a.path: {'action': a.kind, 'path': a.path} for a in actions}
+        self.data.update(checking=None, total=len(actions), pending=len(actions), queued=len(actions), queue=list(islice(self.waiting.values(), 20)), phase='syncing')
         self.write(message=f'Syncing {len(actions)} changes')
 
     @transfer_update
     def begin(self, action):
         self.active = {'action': action.kind, 'path': action.path}
         self.data['active'] = self.active
-        self.data['queue'] = self.waiting[1:21]
+        self.data['queue'] = list(islice(self.waiting.values(), 1, 21))
         self.data['queued'] = max(0, len(self.waiting) - 1)
         self.phase('prepare', action.path, label=ACTION_LABELS.get(action.kind, 'Working on'))
 
@@ -288,9 +290,9 @@ class Activity:
     @transfer_update
     def complete(self, action, skipped=False):
         self.data['completed'] += 1
-        self.waiting = [item for item in self.waiting if item['path'] != action.path]
+        self.waiting.pop(action.path, None)
         self.active = None
-        self.data.update(pending=len(self.waiting), queued=len(self.waiting), queue=self.waiting[:20], current=None, active=None)
+        self.data.update(pending=len(self.waiting), queued=len(self.waiting), queue=list(islice(self.waiting.values(), 20)), current=None, active=None)
         if not skipped:
             counts = self.data['summary']
             if action.kind in ('mkdir-local', 'mkdir-remote'):

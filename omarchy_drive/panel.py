@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -36,21 +37,33 @@ def disk_inventory(root, budget=1):
     sizes, counts, deadline, approximate = {}, {}, time.monotonic() + budget, False
     if not root.is_dir() or root.is_symlink():
         return sizes, counts, approximate
-    for directory, folders, files in os.walk(root, followlinks=False):
-        folders[:] = [name for name in folders if not (Path(directory) / name).is_symlink()]
-        relative = Path(directory).relative_to(root)
-        group = relative.parts[0] if relative.parts else ''
-        for name in files:
-            path = Path(directory) / name
-            if path.is_symlink() or name.startswith('.omarchy-drive-tmp-') or name == 'RCLONE_TEST':
-                continue
-            try:
-                sizes[group] = sizes.get(group, 0) + path.stat().st_size
-                counts[group] = counts.get(group, 0) + 1
-            except OSError:
-                approximate = True
-            if time.monotonic() > deadline:
-                return sizes, counts, True
+    pending = [(root, '')]
+    while pending:
+        directory, group = pending.pop()
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    # Check directories too: a tree full of empty folders must
+                    # obey the same UI budget as a tree full of files.
+                    if time.monotonic() > deadline:
+                        return sizes, counts, True
+                    if entry.name.startswith(TEMP_PREFIX) or entry.name == 'RCLONE_TEST' or entry.is_symlink():
+                        continue
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if os.path.ismount(entry.path):
+                                approximate = True
+                            else:
+                                pending.append((entry.path, group or entry.name))
+                        else:
+                            info = entry.stat(follow_symlinks=False)
+                            if stat.S_ISREG(info.st_mode):
+                                sizes[group] = sizes.get(group, 0) + info.st_size
+                                counts[group] = counts.get(group, 0) + 1
+                    except OSError:
+                        approximate = True
+        except OSError:
+            approximate = True
     return sizes, counts, approximate
 
 
@@ -72,6 +85,8 @@ def folder_list(settings, paths, drive_names, available, old):
     for name in drive_names - rows.keys():
         rows[name] = dict(name=name, selected=False, error=drive_folder_error(name, paths))
     total, approximate = 0, False
+    deadline = time.monotonic() + 1
+    previous = {row['name']: row for row in old.get('folders', [])}
     for name, row in rows.items():
         source = Path.home() / name
         at_home = source.is_dir() and not source.is_symlink()
@@ -82,7 +97,13 @@ def folder_list(settings, paths, drive_names, available, old):
             # A ticked folder with no identity was chosen from Drive and has not been created yet.
             never_local = isinstance(entry, dict) and entry.get('identity') is None
             row['where'] = 'drive' if name in drive_names or never_local else 'home'
-        sizes, _, partial = disk_inventory(source, budget=0.15) if at_home and not row['error'] else ({}, {}, False)
+        budget = max(0, min(0.15, deadline - time.monotonic()))
+        if at_home and not row['error'] and budget:
+            sizes, _, partial = disk_inventory(source, budget=budget)
+        elif at_home and not row['error']:
+            sizes, partial = {'': previous.get(name, {}).get('localBytes', 0)}, True
+        else:
+            sizes, partial = {}, False
         row.update(localBytes=sum(sizes.values()), approx=partial, error=safe(row['error']))
         if row['selected']:
             total += row['localBytes']

@@ -28,6 +28,22 @@ class ActivityTests(unittest.TestCase):
         self.now = 0
         self.activity = Activity(self.paths, lambda: self.now)
 
+    def test_out_of_order_completions_keep_queue_order_and_counts(self):
+        actions = [Action('upload', f'Work/{i}') for i in range(1000)]
+        self.activity.start()
+        self.activity.planned(actions)
+        self.activity.begin(actions[17])
+        data = read_json(self.paths.status)
+        self.assertEqual(data['queued'], 999)
+        self.assertNotIn('Work/17', [item['path'] for item in data['queue']])
+        self.activity.complete(actions[17])
+        self.activity.begin(actions[0])
+        self.activity.complete(actions[0])
+        data = read_json(self.paths.status)
+        self.assertEqual((data['pending'], data['queued'], data['completed']), (998, 998, 2))
+        self.assertEqual([item['path'] for item in data['queue']],
+                         [action.path for action in actions[1:22] if action.path != 'Work/17'])
+
     def test_shared_state_tracks_direction_full_path_queue_and_rate(self):
         self.activity.start()
         actions = [Action('upload', 'Projects/report.pdf'), Action('download', 'Pictures/photo.jpg')]

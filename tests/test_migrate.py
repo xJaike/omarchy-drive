@@ -61,7 +61,7 @@ class MigrateTests(unittest.TestCase):
         self.assertEqual(self.store.stored_identity(), 'root')
         self.assertTrue(self.local.exists())
         actions = Engine(self.paths, settings, self.store, self.drive).snapshot()
-        self.assertEqual({a.kind for a in actions}, {'remember'})
+        self.assertEqual(actions, [])
         self.assertFalse(migrate(self.paths))
 
     def identity_backup(self):

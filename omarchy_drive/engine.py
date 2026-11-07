@@ -53,7 +53,12 @@ def local_path(root, relative):
     return path
 
 
-def scan_local(root, prefix='', included=None, skipped=None, progress=None):
+def file_signature(info):
+    # ctime detects same-size edits even if an application restores mtime.
+    return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_mode]
+
+
+def scan_local(root, prefix='', included=None, skipped=None, progress=None, cache=None, fresh=None):
     """List the folder's files. An item that cannot sync goes into skipped, with why, and is left out.
     progress, if given, is called with each file's path and size before the file is read."""
     skipped = {} if skipped is None else skipped
@@ -65,16 +70,20 @@ def scan_local(root, prefix='', included=None, skipped=None, progress=None):
         rest = Path(error.filename).relative_to(root).as_posix()
         skipped[prefix.rstrip('/') if rest == '.' else prefix + rest] = UNREADABLE
     for directory, folders, files in os.walk(root, followlinks=False, onerror=scan_error):
-        if hasattr(included, 'prepare'):
-            included.prepare([(prefix + (Path(directory) / name).relative_to(root).as_posix(), name in folders)
+        directory = Path(directory)
+        rest = directory.relative_to(root).as_posix()
+        relative_prefix = prefix if rest == '.' else prefix + rest + '/'
+        directory_names = set(folders)
+        batched_selection = hasattr(included, 'prepare')
+        if batched_selection:
+            included.prepare([(relative_prefix + name, name in directory_names)
                               for name in folders + files])
-        for name in list(folders) + files:
-            path = Path(directory) / name
-            relative = prefix + path.relative_to(root).as_posix()
+        for name in folders + files:
+            path = directory / name
+            relative = relative_prefix + name
             # Removing a folder here also keeps os.walk from opening it, so nothing below it can block.
-            if name.startswith(TEMP_PREFIX) or relative in IGNORED or (included and not (included(relative, name in folders) if hasattr(included, 'prepare') else included(relative))):
-                if name in folders:
-                    folders.remove(name)
+            if name.startswith(TEMP_PREFIX) or relative in IGNORED or (included and not (included(relative, name in directory_names) if batched_selection else included(relative))):
+                directory_names.discard(name)
                 continue
             reason = None
             try:
@@ -89,19 +98,23 @@ def scan_local(root, prefix='', included=None, skipped=None, progress=None):
                 elif stat.S_ISREG(info.st_mode):
                     if progress:
                         progress(relative, info.st_size)
-                    checksum = digest(path)
-                    after = path.stat()
-                    if (info.st_size, info.st_mtime_ns, info.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+                    signature = file_signature(info)
+                    cached = cache.get(str(path.absolute())) if cache is not None else None
+                    checksum = cached['hash'] if cached and cached.get('signature') == signature else digest(path)
+                    after = path.lstat()
+                    if signature != file_signature(after):
                         raise Blocked(f'A local file changed during scanning: {relative}. Retry sync.')
                     result[relative] = dict(kind='file', hash=checksum, size=info.st_size)
+                    if fresh is not None:
+                        fresh[str(path.absolute())] = dict(signature=signature, hash=checksum)
                 else:
                     reason = SPECIAL
             except PermissionError:
                 reason = UNREADABLE
             if reason:
                 skipped[relative] = reason
-                if name in folders:
-                    folders.remove(name)
+                directory_names.discard(name)
+        folders[:] = [name for name in folders if name in directory_names]
     return result
 
 
@@ -134,7 +147,8 @@ def plan(local, remote, baseline, max_deletes=20, allow_many_deletes=False):
             continue
         if left and right:
             if left['hash'] == right['hash']:
-                actions.append(Action('remember', path))
+                if not prior or prior['hash'] != right['hash'] or prior['id'] != right['id']:
+                    actions.append(Action('remember', path))
             elif not prior:
                 actions.append(Action('conflict', path, 'Keep both existing versions'))
             else:
@@ -207,13 +221,15 @@ class Engine:
                         if (entry or {}).get('identity') is None}
         self.local = {}
         problems, unusable = {}, {}
+        cache, fresh = self.store.local_hashes(), {}
         for name, source in sources.items():
             if not source.exists():
                 continue  # Drive-only, so plan emits mkdir-local.
             if included(name):
                 self.local[name] = {'kind': 'dir'}
                 self.local.update(scan_local(source, name + '/', included, problems,
-                                             lambda path, size: self.activity.checked('local', path, size)))
+                                             lambda path, size: self.activity.checked('local', path, size), cache, fresh))
+        self.store.save_local_hashes(fresh)
         # Build complete listings before any local or cloud mutation.
         self.remote = self.drive.scan(self.settings['folder_id'], included, unusable)
         for name in sources:

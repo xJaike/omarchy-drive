@@ -122,6 +122,7 @@ class Store:
         self.db.execute('PRAGMA synchronous=FULL')
         self.db.executescript('''
           CREATE TABLE IF NOT EXISTS baseline(path TEXT PRIMARY KEY, data TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS local_hashes(path TEXT PRIMARY KEY, data TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS pending(key TEXT PRIMARY KEY, data TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, time REAL NOT NULL, message TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -136,12 +137,33 @@ class Store:
         return {path: json.loads(data) for path, data in self.db.execute('SELECT path,data FROM baseline')}
 
     @synchronized
+    def local_hashes(self):
+        return {path: json.loads(data) for path, data in self.db.execute('SELECT path,data FROM local_hashes')}
+
+    @synchronized
+    def save_local_hashes(self, entries):
+        # Keep unchanged rows untouched; large idle trees should produce no WAL writes.
+        previous = self.local_hashes()
+        removed = previous.keys() - entries.keys()
+        changed = [(path, json.dumps(value)) for path, value in entries.items()
+                   if previous.get(path) != value]
+        if not removed and not changed:
+            return
+        with self.db:
+            self.db.executemany('DELETE FROM local_hashes WHERE path=?', ((path,) for path in removed))
+            self.db.executemany('INSERT OR REPLACE INTO local_hashes VALUES (?,?)', changed)
+
+    @synchronized
     def remember(self, path, entry):
         with self.db:
             if entry is None:
                 self.db.execute('DELETE FROM baseline WHERE path=?', (path,))
             else:
-                self.db.execute('INSERT OR REPLACE INTO baseline VALUES (?,?)', (path, json.dumps(entry)))
+                data = json.dumps(entry)
+                row = self.db.execute('SELECT data FROM baseline WHERE path=?', (path,)).fetchone()
+                if row and row[0] == data:
+                    return
+                self.db.execute('INSERT OR REPLACE INTO baseline VALUES (?,?)', (path, data))
 
     @synchronized
     def pending(self, key):
