@@ -46,6 +46,7 @@ For a visual index and the provenance of every image, see [docs/README.md](READM
 - [Use a different Drive folder](#use-a-different-drive-folder)
 - [Bar widget controls](#bar-widget-controls)
 - [Daily commands](#daily-commands)
+- [Fast checks and transfer performance](#fast-checks-and-transfer-performance)
 - [Troubleshooting](#troubleshooting)
 - [Sync rules and limitations](#sync-rules-and-limitations)
 - [Backups, credentials, and state](#backups-credentials-and-state)
@@ -319,7 +320,8 @@ omarchy-drive doctor
 ```
 
 Look for **Local scan: OK** and **Drive access: OK**. A baseline of zero files is
-normal before the first sync.
+normal before the first sync. `doctor` deliberately hashes local files without
+using the repeat-scan cache, so it can take longer than a later sync or preview.
 
 Then preview the proposed changes:
 
@@ -342,7 +344,9 @@ and initialize local bookkeeping. It displays large deletion plans for review;
 normal sync still enforces the deletion limits.
 
 Check that the folders and proposed transfers match your intentions before
-running sync. A preview is a snapshot: the app scans again when applying changes.
+running sync. A preview is a snapshot: the app scans again when applying changes,
+reusing checksums for unchanged local files. Preview also builds or updates that
+cache; the first preview may therefore take longer than later checks.
 
 ## 10. Run your first sync
 
@@ -359,7 +363,10 @@ Up to date. Applied N changes.
 ```
 
 `N` is the number of changes for your run. Open a ticked home folder and its partner
-inside **My Drive/Omarchy** in the browser to check the result.
+inside **My Drive/Omarchy** in the browser to check the result. Independent uploads
+and downloads share a limit of four concurrent transfers. Folder creation,
+conflict resolution and removals remain ordered; completed files keep their
+checkpoints if a later operation fails.
 
 To confirm convergence, run another preview:
 
@@ -408,7 +415,7 @@ This screenshot contains no personal account information.*
 
 
 Left-click the Drive bar icon for the native panel. Right-click refreshes status;
-hovering shows current transfers, the waiting queue, and recent file history.
+hovering shows the status, an attention reason when needed, and the sync summary.
 The panel includes **Sync now**, **Backups**, **Drive web**, the schedule switch,
 and the **Folders** list.
 **Drive web** opens the configured cloud folder in a browser; it does not mount it.
@@ -558,27 +565,23 @@ already installed. Add it separately only when you used the source-checkout rout
 omarchy plugin add https://github.com/xJaike/omarchy-drive.git --enable
 ```
 
-The widget calls the installed `~/.local/bin/omarchy-drive` executable.
-Adding the widget does not install the sync helpers or enable automatic sync.
+The widget uses its bundled Python bridge; installed sync helpers point into the
+plugin checkout. Adding the widget does not install those helpers or enable
+automatic sync.
 
 | Mouse action | Result |
 | --- | --- |
 | Left-click | Open the Google Drive panel |
 | Right-click | Refresh panel status |
-| Hover | Live per-file sync details |
+| Hover | Status, attention reason when needed, and sync summary |
 
-Hover over the widget to see the current filename and whether it is uploading,
-downloading, preparing, or saving a backup. During a transfer, the hover details
-show per-file percentage, bytes transferred, speed, and an ETA when enough samples
-are available. The bar shows `↑` for uploads and `↓` for downloads.
-
-The hover card also lists completed upload/download counts, remaining changes,
-up to five waiting files with their planned actions, and five recent completed
-or failed files with timestamps. Larger queues show a remaining-item count;
-open the panel for more details. Progress percentages describe the
-current transfer, not the entire sync. Quiet checks reset current-run counts and
-retain recent file history. A failed transfer is marked stopped, so old progress
-does not appear as an active upload or download.
+Open the panel for the file being checked, its running count, the active
+transfer's percentage, bytes, speed and ETA, the next three waiting files, and
+recent file history. An unchanged local file usually needs only metadata checks
+and a cached checksum. The backend retains up to 20 waiting items for presentation.
+Progress percentages describe the current transfer, not the entire sync. Quiet
+checks reset current-run counts and retain recent history. Failed transfers are
+marked stopped, so old progress does not appear active.
 
 The v2 plugin ID is `io.github.xjaike.google-drive`. If you have an older widget
 with the ID `omarchy-drive`, that separate copy may still display the old engine's
@@ -609,7 +612,41 @@ Do this only if that legacy widget is installed. Avoid enabling both versions.
 | `omarchy-drive --help` | Show available commands |
 | `omarchy-drive setup --help` | Show setup options |
 
+## Fast checks and transfer performance
+
+The first sync or preview hashes selected local files and builds a persistent
+checksum cache. Later checks reuse hashes when file identity, size, modification
+time, change time and mode match. New or changed files are hashed again. The cache
+is separate from sync history, and overwrites and deletions still verify content.
+Drive folder listings run with up to four concurrent requests. File transfers
+have a separate four-worker limit and start after scanning finishes.
+
+Unchanged files no longer generate redundant bookkeeping actions or database row
+rewrites. Large directory checks, ignore-rule batches and transfer queue updates
+also avoid repeated work. Panel size estimates share a one-second traversal
+budget, with up to 0.15 seconds per folder. Unfinished or reused sizes are marked
+approximate; network requests and slow filesystem calls can still take longer.
+
+Selected directories are still walked locally and listed on Drive every cycle.
+There is no filesystem watcher, Drive change feed, push sync or placeholder
+filesystem. For measurements, a local benchmark, and command-specific cache
+behavior, see [Performance](PERFORMANCE.md).
+
 ## Troubleshooting
+
+### Checking files or opening the folder list takes too long
+
+The first scan, large edits and `doctor` need content hashing. Later sync and
+preview scans reuse unchanged checksums, but many Drive folders still require
+network listings. Use the panel's checking phase and path to distinguish the two.
+Avoid running `doctor` before every sync; it always performs a fresh local hash
+scan. Exclude generated directories you do not want to sync, or use local
+`.gitignore` rules to prune them.
+
+A size marked approximate means the panel stopped estimating within its budget
+or could not inspect everything. The estimate can be partial, or reuse an older
+value for a folder whose scan could not start. It does not mean the sync itself
+is incomplete. See [slow-check troubleshooting](PERFORMANCE.md#when-checking-still-takes-time).
 
 ### HTTP 403: `accessNotConfigured` or `SERVICE_DISABLED`
 
@@ -776,8 +813,9 @@ or upload-session URLs. Activity and status can contain personal filenames.
   with a local path leaves both alone, and is listed by `omarchy-drive skipped`.
 - This version targets My Drive. Shared drives and exclusion patterns are not
   implemented. The legacy root `RCLONE_TEST` marker is ignored.
-- Local hashes and complete remote folder listings run each cycle. Large trees
-  can take time to scan even when no files need transferring.
+- Local metadata walks and complete selected remote folder listings run each
+  cycle. Unchanged local hashes are cached; new or changed files are rehashed.
+  Large directory trees and network latency can still make checks take time.
 - Uploads use persisted resumable sessions and pre-generated Drive IDs.
   Downloads use verified partial files before publishing complete content.
 - SQLite checkpoints each completed file. A later failure retains completed
@@ -798,7 +836,7 @@ Default locations:
 | `~/.config/omarchy-drive/client.json` | Saved Desktop OAuth client |
 | `~/.config/omarchy-drive/tokens.json` | Google access and refresh tokens |
 | `~/.config/omarchy-drive/settings.json` | Drive folder, ticked folders, exclusions and settings |
-| `~/.local/state/omarchy-drive-v2/sync.sqlite3` | Baseline, pending sessions, and recent activity |
+| `~/.local/state/omarchy-drive-v2/sync.sqlite3` | Baseline, local checksum cache, pending sessions, and recent activity |
 | `~/.local/state/omarchy-drive-v2/status.json` | Latest recorded status |
 | `~/.local/state/omarchy-drive-v2/install-backups/` | Replaced installation files |
 
@@ -824,6 +862,7 @@ Do not edit stored credentials or session records manually.
 
 ```bash
 omarchy-drive pause
+systemctl --user stop omarchy-drive-sync.service
 omarchy plugin update io.github.xjaike.google-drive
 bash ~/.config/omarchy/plugins/io.github.xjaike.google-drive/install.sh
 omarchy-drive doctor
@@ -831,8 +870,8 @@ omarchy-drive preview
 omarchy-drive resume
 ```
 
-Pause first, because the new code starts working as soon as the plugin files
-change. Updating from a version that used `~/GoogleDrive` migrates your settings
+Pause the timer and stop the active service first, because the new code starts
+working as soon as the plugin files change. Updating from a version that used `~/GoogleDrive` migrates your settings
 within seconds, because the panel's status poll runs the new code, even before the
 installer has run. Automatic sync may then run if you left it on.
 
@@ -1007,6 +1046,7 @@ Run from the repository root:
 
 ```bash
 python3 -m unittest discover -s tests -v
+node tests/model_flatten.test.js
 python3 -m compileall -q omarchy_drive
 bash -n install.sh uninstall.sh
 ```
@@ -1020,6 +1060,9 @@ omarchy plugin validate .
 The suite covers reconciliation with real temporary files, protocol behavior
 through a local HTTP server, OAuth callback and refresh handling, resumable
 transfers, conflicts, deletion safeguards, installation, and terminal controls.
+The performance update passed 366 Python tests plus the JavaScript model checks.
+Cache invalidation, changed-row persistence, queue ordering, ignore batches and
+size-estimation budgets have regression coverage; see [Performance](PERFORMANCE.md#verification).
 Tests do not contact a live Google account. Actual sign-in and end-to-end Google
 Drive compatibility must also be checked with your own client and account.
 

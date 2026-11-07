@@ -50,6 +50,8 @@ cycle; this is not yet a filesystem watcher or a Drive change-feed service.
 A local benchmark of 256 unchanged files totaling 256 MiB took 0.441 seconds with
 full hashing and 0.008 seconds with the cache (about 57× faster for the local
 scan). Actual gains depend on file sizes, folder count, disk and network latency.
+See the [performance guide](docs/PERFORMANCE.md) for command-specific behavior,
+benchmark scope, troubleshooting, and remaining bottlenecks.
 
 ## Full setup documentation
 
@@ -202,8 +204,9 @@ and shortcuts remain available in the browser and are skipped in offline sync.
 
 ## Recent files and transfers
 
-While a sync checks for changes, the panel shows which file it is reading and a
+While a sync checks for changes, the panel shows which file it is checking and a
 running count, first for your files and then for Google Drive.
+Checking an unchanged local file normally reads metadata and reuses its checksum.
 
 Sync runs up to **four file transfers at once**, sharing the limit between uploads
 and downloads. Folder creation, conflict resolution and removals remain ordered.
@@ -265,14 +268,15 @@ settings. See the full setup guide for using a different one.
 
 ```bash
 ~/.local/bin/omarchy-drive pause
+systemctl --user stop omarchy-drive-sync.service
 omarchy plugin update io.github.xjaike.google-drive
 bash ~/.config/omarchy/plugins/io.github.xjaike.google-drive/install.sh
 ~/.local/bin/omarchy-drive preview
 ~/.local/bin/omarchy-drive resume
 ```
 
-Pause first, because the new code starts working as soon as the plugin files
-change. Updating from a version that used `~/GoogleDrive` migrates your settings
+Pause and stop the active service first, because the new code starts working as
+soon as the plugin files change. Updating from a version that used `~/GoogleDrive` migrates your settings
 within seconds, because the panel's status poll runs the new code, even before the
 installer has run. Automatic sync may then run if you left it on.
 
@@ -300,12 +304,17 @@ for review if the uninstaller reports them.
 
 ```bash
 python3 -m unittest discover -s tests -v
+node tests/model_flatten.test.js
 python3 -m compileall -q omarchy_drive gdrive-sync.py configure.py
 bash -n install.sh uninstall.sh
 omarchy plugin validate .
 ```
 
 Tests use temporary files, a local Drive protocol server, and fake user services.
+The performance update passed 366 Python tests and the JavaScript model checks.
+Cache invalidation, changed-row persistence, queue ordering and size-scan budgets
+have regression coverage; benchmark results are in
+[the performance guide](docs/PERFORMANCE.md#measurements).
 They do not contact a real Google account. End-to-end account checks require your
 own OAuth client. This is an independent fork; upstream's sync-engine behavior
 and release claims do not automatically apply to it.

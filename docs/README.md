@@ -16,6 +16,23 @@ Omarchy plugin and connect the standalone Google Drive backend.
 9. [Run the first sync](STANDALONE_SETUP.md#10-run-your-first-sync).
 10. [Enable the schedule](STANDALONE_SETUP.md#11-enable-automatic-sync).
 
+## Performance and maintenance
+
+- [Fast checks, concurrent transfers and measured gains](PERFORMANCE.md).
+- [Slow-check troubleshooting](PERFORMANCE.md#when-checking-still-takes-time).
+- [Update an installed plugin](STANDALONE_SETUP.md#update-or-migrate-an-installation).
+- [Changes in this fork](../CHANGELOG.md).
+
+The first sync or preview builds the local checksum cache. Later scans reuse
+unchanged checksums; Drive folder listings and file transfers each use a separate
+limit of four concurrent workers. Panel size estimates have a shared one-second
+traversal budget. See the performance guide for remaining full-tree work and
+benchmark limits.
+
+The dated files under `superpowers/` preserve the original optional-folders
+design and implementation plan. Their banners link to current behavior; old
+checkboxes and proposed APIs are historical records, not current setup steps.
+
 ## Backend setup figures
 
 These are **original navigation diagrams, not screenshots of Google Cloud**.

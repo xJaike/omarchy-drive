@@ -1,7 +1,16 @@
 # Optional folders: design
 
+> Historical document from 2026-11-04, retained for design context. Current
+> setup and behavior are documented in [the setup guide](../../STANDALONE_SETUP.md)
+> and [the performance guide](../../PERFORMANCE.md). The 2026-11-07 implementation
+> adds cached local checksums, parallel listings and transfers, compiled exclusion
+> lookups, bounded queue updates and shared panel inventory budgets. Proposed APIs,
+> unchecked tasks and approval steps below describe the original plan, not an
+> outstanding installation checklist.
+
+
 Date: 2026-11-04
-Status: awaiting review
+Status: historical design; implemented and subsequently revised
 
 ## Goal
 

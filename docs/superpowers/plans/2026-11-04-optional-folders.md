@@ -1,5 +1,14 @@
 # Optional Folders Implementation Plan
 
+> Historical document from 2026-11-04, retained for design context. Current
+> setup and behavior are documented in [the setup guide](../../STANDALONE_SETUP.md)
+> and [the performance guide](../../PERFORMANCE.md). The 2026-11-07 implementation
+> adds cached local checksums, parallel listings and transfers, compiled exclusion
+> lookups, bounded queue updates and shared panel inventory budgets. Proposed APIs,
+> unchecked tasks and approval steps below describe the original plan, not an
+> outstanding installation checklist.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Remove the required `~/GoogleDrive` folder, so that sync covers only the home folders the user ticks, minus any files or subfolders they exclude.

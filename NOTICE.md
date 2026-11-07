@@ -12,6 +12,12 @@ The backend is adapted from xJaike's standalone Omarchy Drive engine. It uses
 Python's standard library and Google's Drive API directly. This fork does not
 execute or require the previous sync engine or its FUSE mount.
 
+The current backend includes persistent local checksum caching, concurrent
+folder listings and file transfers, and bounded panel inventory work. These are
+changes in this fork; see [Performance](docs/PERFORMANCE.md) and
+[CHANGELOG.md](CHANGELOG.md) for behavior, measurements and limits. The preserved
+upstream notice describes the earlier upstream implementation.
+
 The Google Drive logo geometry and trademark notice are unchanged from upstream.
 Google Drive is a trademark of Google LLC. This project is not affiliated with,
 endorsed by, or sponsored by Google.

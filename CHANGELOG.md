@@ -1,5 +1,31 @@
 # Standalone backend fork
 
+## Unreleased: faster checks and sync processing — 2026-11-07
+
+- Persist local checksums in SQLite. Repeat sync and preview scans reuse them
+  when device, inode, size, nanosecond modification/change times and mode match.
+  New or changed files are hashed again; overwrite and deletion safeguards still
+  verify file contents. The first scan builds the cache.
+- List independent Drive folders with up to four concurrent requests. Full
+  remote listings and local metadata walks still run each cycle; no filesystem
+  watcher, Drive change feed or push notifications are implemented.
+- Sync up to four independent files concurrently, sharing the transfer limit
+  between uploads and downloads. Folder creation, conflicts and removals remain
+  ordered. Completed transfers keep their durable checkpoints after a failure.
+- Avoid rebuilding unchanged checksum-cache rows, rewriting identical baseline
+  records, and planning bookkeeping actions for already-recorded matching files.
+- Use set lookups for directory names and exclusions, reuse shared ancestor
+  safety checks within ignore batches, and avoid repeated relative-path work.
+- Keep transfer queues ordered with constant-time removal and bounded visible
+  queue reads, instead of walking the full queue for every progress update.
+- Use directory-entry metadata for panel size estimates and a shared one-second
+  traversal budget, with a 0.15-second limit per folder. Unfinished estimates are
+  approximate; previous sizes are reused when the shared budget is exhausted.
+  Nested mounts are skipped. Slow individual system calls can exceed the budget.
+- Add cache, queue, ignore-batch and inventory-budget regression coverage. All
+  366 Python tests and JavaScript model checks passed for the performance update.
+- Document measured gains and their limits in [Performance](docs/PERFORMANCE.md).
+
 ## Unreleased: optional folders
 
 `~/GoogleDrive` is no longer special. You choose which home folders sync, and can
@@ -23,7 +49,7 @@ something is ticked.
 - A problem a skip cannot settle offers **Exclude this**, or **Untick this** for a
   ticked folder. The panel never does either by itself.
 - The panel shows sync progress per file. While checking, it names the file being
-  read with a running count. While syncing, it shows **Syncing · 4 of 120**, the
+  checked with a running count. While syncing, it shows **Syncing · 4 of 120**, the
   current file's progress, and the next three files as **Waiting**. Creating a
   folder no longer shows an empty 0 B progress bar. A large file is named at once,
   so the panel is not blank while it is read.

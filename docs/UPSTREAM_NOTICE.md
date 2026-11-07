@@ -1,5 +1,10 @@
 # Notices
 
+> Historical upstream notice, retained for attribution. References below to
+> rclone and FUSE describe upstream, not this fork's standalone Python backend.
+> See [the current attribution](../NOTICE.md), [setup](STANDALONE_SETUP.md) and
+> [performance guide](PERFORMANCE.md) for this fork. The original notice follows.
+
 ## Derived from omarchy-google-drive
 
 This plugin began as a rewrite of
@@ -13,7 +18,7 @@ particular the bar-widget and panel structure, the panel's keyboard-cursor
 handling, and several formatting helpers.
 
 Both projects are MIT licensed. Wesley Cole's copyright is retained in
-[LICENSE](LICENSE) alongside the current author's, as MIT requires for
+[LICENSE](../LICENSE) alongside the current author's, as MIT requires for
 substantial portions.
 
 ## The Google Drive mark
