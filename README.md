@@ -177,6 +177,11 @@ and shortcuts remain available in the browser and are skipped in offline sync.
 While a sync checks for changes, the panel shows which file it is reading and a
 running count, first for your files and then for Google Drive.
 
+Sync runs up to **four file transfers at once**, sharing the limit between uploads
+and downloads. Folder creation, conflict resolution and removals remain ordered.
+If a transfer fails, new transfers stop and active transfers settle before sync
+reports the error; completed files retain their checkpoints for the next run.
+
 While it syncs, the heading shows its place in the plan, such as **Syncing · 4 of
 120**. The current file has a progress card with direction, filename, parent
 folder, percentage, transferred bytes, speed and ETA; a step with nothing to

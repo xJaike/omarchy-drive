@@ -3,10 +3,11 @@ import hashlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import secrets
 import time
+import threading
 import urllib.parse
 import webbrowser
 from .http import HTTP, APIError
-from .storage import AuthRequired, Blocked, atomic_json, read_json
+from .storage import AuthRequired, Blocked, atomic_json, read_json, synchronized
 
 TOKEN_URL = 'https://oauth2.googleapis.com/token'
 SCOPE = 'https://www.googleapis.com/auth/drive'
@@ -36,10 +37,12 @@ def exchange(data, http=None):
 
 class Tokens:
     def __init__(self, paths, http=None):
+        self._lock = threading.RLock()
         self.paths = paths
         self.http = http
         self.value = read_json(paths.tokens)
 
+    @synchronized
     def access_token(self):
         if not self.value.get('refresh_token'):
             raise AuthRequired('Connect Google Drive first: omarchy-drive setup')
@@ -47,6 +50,7 @@ class Tokens:
             self.refresh()
         return self.value['access_token']
 
+    @synchronized
     def refresh(self):
         if not self.value.get('refresh_token'):
             raise AuthRequired('Connect Google Drive first: omarchy-drive setup')

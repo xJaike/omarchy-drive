@@ -6,6 +6,16 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import time
+import threading
+from functools import wraps
+
+
+def synchronized(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return call
 
 
 class DriveError(Exception):
@@ -106,7 +116,8 @@ class Paths:
 
 class Store:
     def __init__(self, state):
-        self.db = sqlite3.connect(Path(state) / 'sync.sqlite3')
+        self._lock = threading.RLock()
+        self.db = sqlite3.connect(Path(state) / 'sync.sqlite3', check_same_thread=False)
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.execute('PRAGMA synchronous=FULL')
         self.db.executescript('''
@@ -116,12 +127,15 @@ class Store:
           CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
         ''')
 
+    @synchronized
     def close(self):
         self.db.close()
 
+    @synchronized
     def baseline(self):
         return {path: json.loads(data) for path, data in self.db.execute('SELECT path,data FROM baseline')}
 
+    @synchronized
     def remember(self, path, entry):
         with self.db:
             if entry is None:
@@ -129,10 +143,12 @@ class Store:
             else:
                 self.db.execute('INSERT OR REPLACE INTO baseline VALUES (?,?)', (path, json.dumps(entry)))
 
+    @synchronized
     def pending(self, key):
         row = self.db.execute('SELECT data FROM pending WHERE key=?', (key,)).fetchone()
         return json.loads(row[0]) if row else {}
 
+    @synchronized
     def save_pending(self, key, value):
         with self.db:
             if value is None:
@@ -140,6 +156,7 @@ class Store:
             else:
                 self.db.execute('INSERT OR REPLACE INTO pending VALUES (?,?)', (key, json.dumps(value)))
 
+    @synchronized
     def identity(self, value):
         row = self.db.execute("SELECT value FROM metadata WHERE key='identity'").fetchone()
         if row and row[0] != value:
@@ -147,19 +164,23 @@ class Store:
         with self.db:
             self.db.execute("INSERT OR IGNORE INTO metadata VALUES ('identity',?)", (value,))
 
+    @synchronized
     def stored_identity(self):
         row = self.db.execute("SELECT value FROM metadata WHERE key='identity'").fetchone()
         return row[0] if row else None
 
+    @synchronized
     def replace_identity(self, value):
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO metadata VALUES ('identity',?)", (value,))
 
+    @synchronized
     def forget_subtree(self, path):
         # Range on '/'..'0' (the next code point) so '_' and '%' in names stay literal.
         with self.db:
             self.db.execute('DELETE FROM baseline WHERE path=? OR (path>=? AND path<?)', (path, path + '/', path + '0'))
 
+    @synchronized
     def event(self, message):
         with self.db:
             self.db.execute('INSERT INTO events(time,message) VALUES (?,?)', (time.time(), message))

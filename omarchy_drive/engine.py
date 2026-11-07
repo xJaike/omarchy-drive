@@ -1,4 +1,5 @@
 """Content-based two-way reconciliation, independent of any third-party sync tool."""
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from collections import Counter
 from dataclasses import dataclass
 import hashlib
@@ -421,56 +422,83 @@ class Engine:
         self.save_recorded_identities()
         changed = [a for a in actions if a.kind not in ('remember', 'forget')]
         self.activity.planned(changed)
-        completed = 0
-        for action in actions:
-            path = action.path
-            left, right = self.local.get(path), self.remote.get(path)
-            if left and right and left['kind'] == right['kind'] == 'file' and left['hash'] == right['hash']:
-                self.remember(path, right)
-                if action.kind not in ('remember', 'forget'):
-                    self.activity.complete(action, skipped=True)
-                continue
-            if action.kind not in ('remember', 'forget'):
-                self.activity.begin(action)
-            if action.kind == 'mkdir-local':
-                target = self.local_target(path)
-                target.mkdir(parents=True, exist_ok=True)
-                if '/' not in path:
-                    record_identity(self.settings, path, target)
-                    atomic_json(self.paths.settings, self.settings)
-                self.local[path] = {'kind': 'dir'}
-            elif action.kind == 'mkdir-remote':
-                item = self.drive.mkdir(self.parent_id(path), PurePosixPath(path).name, 'folder:' + path)
-                self.remote[path] = item
-            elif action.kind == 'remember':
-                # A prior action may have resolved this conflict copy already.
-                self.remember(path, right)
-            elif action.kind == 'forget':
-                self.store.remember(path, None)
-            elif action.kind == 'upload':
-                self.upload(path, left, right)
-            elif action.kind == 'download':
-                self.download(path, right, left)
-            elif action.kind == 'conflict':
-                self.conflict(path, left, right)
-            elif action.kind == 'archive-local':
-                self.archive_source(path, left)
-                self.store.remember(path, None)
-                self.local.pop(path, None)
-            elif action.kind == 'trash-remote':
-                self.checked_local(path, None)
-                key = hashlib.sha256((right['id'] + right['hash']).encode()).hexdigest()
-                old = self.paths.state / 'downloads' / (key + '.part')
-                self.activity.phase('backup', path, right['size'])
-                self.drive.download(right, old)
-                self.backup(path + '.cloud-before-trash', old, right['hash'])
-                self.drive.trash(right)
-                old.unlink(missing_ok=True)
-                self.store.remember(path, None)
-                self.remote.pop(path, None)
-            if action.kind not in ('remember', 'forget'):
-                completed += 1
-                self.store.event(action.kind + ': ' + path)
-                self.activity.complete(action)
+        # Only independent file transfers overlap. Folders, conflict copies and
+        # removals are barriers, retaining the plan's dependency and safety order.
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix='drive-transfer') as pool:
+            pending = set()
+            try:
+                for action in actions:
+                    if action.kind in ('upload', 'download'):
+                        if len(pending) == 4:
+                            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                            for future in done:
+                                future.result()
+                        # Observe failures before submitting any more work.
+                        for future in tuple(pending):
+                            if future.done():
+                                pending.remove(future)
+                                future.result()
+                        pending.add(pool.submit(self.execute, action))
+                    else:
+                        for future in pending:
+                            future.result()
+                        pending.clear()
+                        self.execute(action)
+                for future in pending:
+                    future.result()
+            except BaseException:
+                for future in pending:
+                    future.cancel()
+                raise
         self.activity.finish()
         return changed
+
+    def execute(self, action):
+        path = action.path
+        left, right = self.local.get(path), self.remote.get(path)
+        if left and right and left['kind'] == right['kind'] == 'file' and left['hash'] == right['hash']:
+            self.remember(path, right)
+            if action.kind not in ('remember', 'forget'):
+                self.activity.complete(action, skipped=True)
+            return
+        if action.kind not in ('remember', 'forget'):
+            self.activity.begin(action)
+        if action.kind == 'mkdir-local':
+            target = self.local_target(path)
+            target.mkdir(parents=True, exist_ok=True)
+            if '/' not in path:
+                record_identity(self.settings, path, target)
+                atomic_json(self.paths.settings, self.settings)
+            self.local[path] = {'kind': 'dir'}
+        elif action.kind == 'mkdir-remote':
+            item = self.drive.mkdir(self.parent_id(path), PurePosixPath(path).name, 'folder:' + path)
+            self.remote[path] = item
+        elif action.kind == 'remember':
+            # A prior action may have resolved this conflict copy already.
+            self.remember(path, right)
+        elif action.kind == 'forget':
+            self.store.remember(path, None)
+        elif action.kind == 'upload':
+            self.upload(path, left, right)
+        elif action.kind == 'download':
+            self.download(path, right, left)
+        elif action.kind == 'conflict':
+            self.conflict(path, left, right)
+        elif action.kind == 'archive-local':
+            self.archive_source(path, left)
+            self.store.remember(path, None)
+            self.local.pop(path, None)
+        elif action.kind == 'trash-remote':
+            self.checked_local(path, None)
+            key = hashlib.sha256((right['id'] + right['hash']).encode()).hexdigest()
+            old = self.paths.state / 'downloads' / (key + '.part')
+            self.activity.phase('backup', path, right['size'])
+            self.drive.download(right, old)
+            self.backup(path + '.cloud-before-trash', old, right['hash'])
+            self.drive.trash(right)
+            old.unlink(missing_ok=True)
+            self.store.remember(path, None)
+            self.remote.pop(path, None)
+        if action.kind not in ('remember', 'forget'):
+            self.store.event(action.kind + ': ' + path)
+            self.activity.complete(action)

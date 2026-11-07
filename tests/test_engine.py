@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -113,6 +114,91 @@ class EngineTests(unittest.TestCase):
         target = self.local / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
+
+    def test_four_transfers_overlap_with_durable_checkpoints_and_progress(self):
+        self.drive.mkdir('root', 'Sync', 'folder:Sync')
+        for number in range(4):
+            self.write(f'upload-{number}', b'local')
+            self.drive.put(f'Sync/download-{number}', b'cloud')
+        release = threading.Event()
+        full = threading.Event()
+        lock = threading.Lock()
+        counts = dict(active=0, peak=0)
+        errors = []
+
+        def gated(operation):
+            def run(*args, **kwargs):
+                with lock:
+                    counts['active'] += 1
+                    counts['peak'] = max(counts['peak'], counts['active'])
+                    if counts['active'] == 4:
+                        full.set()
+                try:
+                    if not release.wait(5):
+                        raise RuntimeError('Parallel transfers did not start')
+                    return operation(*args, **kwargs)
+                finally:
+                    with lock:
+                        counts['active'] -= 1
+            return run
+
+        self.drive.upload = gated(self.drive.upload)
+        self.drive.download = gated(self.drive.download)
+        engine = self.engine()
+
+        def sync():
+            try:
+                engine.sync()
+            except BaseException as error:
+                errors.append(error)
+
+        worker = threading.Thread(target=sync)
+        worker.start()
+        try:
+            self.assertTrue(full.wait(5))
+            data = read_json(self.paths.status)
+            self.assertEqual(len(data['transfers']), 4)
+            self.assertEqual(data['queued'], 4)
+            self.assertEqual(len({row['path'] for row in data['transfers']}), 4)
+        finally:
+            release.set()
+            worker.join(10)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(counts['peak'], 4)
+        baseline = self.store.baseline()
+        for number in range(4):
+            self.assertEqual((self.local / f'download-{number}').read_bytes(), b'cloud')
+            self.assertEqual(self.drive.files[f'Sync/upload-{number}']['content'], b'local')
+            self.assertIn(f'Sync/upload-{number}', baseline)
+            self.assertIn(f'Sync/download-{number}', baseline)
+        data = read_json(self.paths.status)
+        self.assertEqual(data['completed'], data['total'])
+        self.assertEqual(data['transfers'], [])
+        self.assertEqual(data['summary']['uploaded'], 4)
+        self.assertEqual(data['summary']['downloaded'], 4)
+
+    def test_parallel_failure_stops_new_transfers_and_can_retry(self):
+        self.drive.mkdir('root', 'Sync', 'folder:Sync')
+        for number in range(9):
+            self.write(f'file-{number}', b'data')
+        barrier = threading.Barrier(4, timeout=5)
+        attempts = []
+        upload = self.drive.upload
+
+        def fail(source, parent, name, checksum, existing=None):
+            attempts.append(name)
+            barrier.wait()
+            raise Offline('Connection lost')
+
+        self.drive.upload = fail
+        with self.assertRaises(Offline):
+            self.engine().sync()
+        self.assertEqual(len(attempts), 4)
+        self.assertEqual(self.store.baseline(), {})
+        self.drive.upload = upload
+        self.engine().sync()
+        self.assertEqual(len(self.store.baseline()), 9)
 
     def test_gitignore_excludes_both_sides_and_reinclusion_merges(self):
         self.write('secret.log', b'original')

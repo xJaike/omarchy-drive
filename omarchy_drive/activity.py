@@ -2,6 +2,8 @@
 import datetime
 import sqlite3
 import time
+import threading
+from functools import wraps
 from .storage import atomic_text, read_json
 
 ACTION_LABELS = {
@@ -133,8 +135,38 @@ def recent_events(paths, limit=20):
     return result
 
 
+def transfer_update(method):
+    """Serialize telemetry and retain a separate progress sample for each worker."""
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with self._lock:
+            worker = threading.get_ident()
+            outermost = not self._updating
+            if outermost:
+                context = self._workers.get(worker, {})
+                self.active = context.get('active')
+                self.sample = context.get('sample')
+                self.data['current'] = context.get('current')
+                self.data['active'] = self.active
+            self._updating += 1
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                self._updating -= 1
+                if outermost:
+                    if self.active or self.data.get('current'):
+                        self._workers[worker] = dict(active=self.active, sample=self.sample,
+                                                     current=self.data.get('current'))
+                    else:
+                        self._workers.pop(worker, None)
+    return call
+
+
 class Activity:
     def __init__(self, paths, clock=time.monotonic):
+        self._lock = threading.RLock()
+        self._workers = {}
+        self._updating = 0
         self.paths, self.clock = paths, clock
         self.started = False
         self.failed = False
@@ -149,9 +181,23 @@ class Activity:
     def write(self, kind='running', message=None):
         if message is not None:
             self.data['message'] = message
+        running = [context['active'] for worker, context in self._workers.items()
+                   if worker != threading.get_ident() and context.get('active')]
+        if self.active:
+            running.append(self.active)
+        self.data['transfers'] = running
+        if self.data.get('phase') == 'syncing':
+            active_paths = {item['path'] for item in running}
+            queue = [item for item in self.waiting if item['path'] not in active_paths]
+            self.data.update(queue=queue[:20], queued=len(queue))
         self.data['kind'] = kind
+        payload = dict(self.data)
+        # A completed worker must not hide another transfer that is still active.
+        if not self.active and running:
+            context = next(c for c in self._workers.values() if c.get('active'))
+            payload.update(active=context['active'], current=context.get('current'))
         self.paths.record(kind, self.data.get('message', ''), **{
-            k: v for k, v in self.data.items() if k not in ('kind', 'message', 'updated', 'last_success', 'scheduled')})
+            k: v for k, v in payload.items() if k not in ('kind', 'message', 'updated', 'last_success', 'scheduled')})
         self.last_write = self.clock()
 
     def start(self):
@@ -188,6 +234,7 @@ class Activity:
         self.data.update(checking=None, total=len(actions), pending=len(actions), queued=len(actions), queue=self.waiting[:20], phase='syncing')
         self.write(message=f'Syncing {len(actions)} changes')
 
+    @transfer_update
     def begin(self, action):
         self.active = {'action': action.kind, 'path': action.path}
         self.data['active'] = self.active
@@ -195,6 +242,7 @@ class Activity:
         self.data['queued'] = max(0, len(self.waiting) - 1)
         self.phase('prepare', action.path, label=ACTION_LABELS.get(action.kind, 'Working on'))
 
+    @transfer_update
     def phase(self, direction, path, total=0, label=None):
         self.sample = None
         self.data['current'] = dict(direction=direction, name=path, bytes=0, total=total,
@@ -202,6 +250,7 @@ class Activity:
         title = label or DIRECTIONS.get(direction, 'Working on')
         self.write(message=title + ': ' + path)
 
+    @transfer_update
     def transfer(self, direction, name, done, total):
         current = self.data.get('current')
         if not current:
@@ -224,6 +273,7 @@ class Activity:
         if now - self.last_write >= .25 or done == total:
             self.write()
 
+    @transfer_update
     def file_done(self, direction, path, size_bytes=0):
         self.data['summary']['uploaded' if direction == 'upload' else 'downloaded'] += 1
         self.add_recent(direction, path, size_bytes=size_bytes)
@@ -235,9 +285,11 @@ class Activity:
             entry['error'] = self.data.get('last_error', '')
         self.data['recent'] = [entry, *self.data.get('recent', [])][:20]
 
+    @transfer_update
     def complete(self, action, skipped=False):
         self.data['completed'] += 1
         self.waiting = [item for item in self.waiting if item['path'] != action.path]
+        self.active = None
         self.data.update(pending=len(self.waiting), queued=len(self.waiting), queue=self.waiting[:20], current=None, active=None)
         if not skipped:
             counts = self.data['summary']
@@ -264,6 +316,12 @@ class Activity:
     def failure(self, kind, message, path=None):
         self.failed = True
         active = self.data.get('active')
+        if not active:
+            context = next((c for c in self._workers.values() if c.get('active')), None)
+            if context:
+                active = context['active']
+                self.active = active
+                self.data.update(active=active, current=context.get('current'))
         self.data['last_error'] = message
         self.data['blockedPath'] = path
         if active:
